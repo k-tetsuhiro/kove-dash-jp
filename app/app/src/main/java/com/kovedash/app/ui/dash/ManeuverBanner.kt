@@ -1,3 +1,4 @@
+// Modified by k-tetsuhiro for kove-dash-jp (2026): distances in km instead of miles.
 package com.kovedash.app.ui.dash
 
 import androidx.compose.foundation.background
@@ -38,9 +39,9 @@ import kotlin.math.roundToInt
  *   - [compact] = true:  dash-side overlay, condensed for 1280×640 with reduced padding.
  *
  * Distance formatting matches what riders read off the dash from muscle memory:
- *   < 500 ft  → "N FT" rounded to 10 ft
- *   < 0.5 mi  → "X.X MI"
- *   ≥ 0.5 mi  → "X MI" or "X.X MI" depending on magnitude
+ *   < 1 km    → "N M" rounded to 10 m
+ *   < 10 km   → "X.X KM"
+ *   ≥ 10 km   → "X KM"
  *
  * Arrow glyph is a plain Unicode character — no asset baking, no SVG. Looks correct on
  * both the phone (font renderer) and the dash via the encoded H.264 frame.
@@ -393,17 +394,12 @@ private fun fallbackInstruction(type: String, modifier: String?): String = when 
 }
 
 internal fun formatDistance(meters: Double): String {
-    val feet = meters * 3.28084
-    if (feet < 500) {
-        val rounded = (feet / 10.0).roundToInt() * 10
-        return "$rounded FT"
+    if (meters < 1000) {
+        val rounded = (meters / 10.0).roundToInt() * 10
+        return "$rounded M"
     }
-    val miles = meters / 1609.344
-    return when {
-        miles < 1.0 -> "%.1f MI".format(miles)
-        miles < 10.0 -> "%.1f MI".format(miles)
-        else -> "${miles.roundToInt()} MI"
-    }
+    val km = meters / 1000.0
+    return if (km < 10.0) "%.1f KM".format(km) else "${km.roundToInt()} KM"
 }
 
 // The dash turn banner appears within this distance of the maneuver (~half a mile).
@@ -418,8 +414,8 @@ internal fun formatEta(seconds: Double): String {
     return "%d:%02d".format(h, m)
 }
 
-/** Distance remaining to destination, always in miles. */
+/** Distance remaining to destination, always in kilometers. */
 internal fun formatTripDistance(meters: Double): String {
-    val miles = meters / 1609.344
-    return if (miles < 10.0) "%.1f MI".format(miles) else "${miles.roundToInt()} MI"
+    val km = meters / 1000.0
+    return if (km < 10.0) "%.1f KM".format(km) else "${km.roundToInt()} KM"
 }
