@@ -1,120 +1,148 @@
-# KoveDash
+# KoveDash JP
 
-Android app that pushes navigation and ambient data to the stock TFT dash on a Kove 450 Rally, using the dash's own BLE and Wi-Fi links. No OEM app, no cloud account, no activation server.
+Kove 450 Rally の純正 TFT メーターに、ナビや天気などの情報を表示する Android アプリです。メーター自体が持っている BLE（Bluetooth Low Energy）と Wi-Fi で通信します。メーカー公式アプリ、クラウドアカウント、アクティベーションサーバーは使いません。
 
-There are two ways it drives the dash:
-
-- **Native data over BLE (default, low power).** The app sends small JSON frames and the dash renders them itself — a turn-by-turn arrow, weather, elevation, and clock sync — with no video pipeline running. This is the primary mode and it's cheap on battery.
-- **Full-map video over Wi-Fi (optional, higher power).** On demand, the app renders a Mapbox map to a virtual display, encodes it to H.264, and streams it to the dash as a full-screen picture.
-
-The repository also contains a full write-up of the reverse-engineered wire protocol, which is probably the most useful part if you don't own this exact bike.
-
-**Status: experimental, single-bike project.** Developed and tested against one 2022 dash running firmware `SV=3.0.4`. It works on my bike. Yours may differ — see [Compatibility](#compatibility). Some paths (turn-advance at highway speed, GPX follow while moving) are validated on the bench or stationary but not yet on a full moving ride; those are called out below and in the [roadmap](docs/ROADMAP.md).
+このリポジトリは [ttarlov/kove-dash](https://github.com/ttarlov/kove-dash) をもとにした**日本向けの改変版**です（Apache License 2.0）。元の英語版 README は [README.en.md](README.en.md) にあります。
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-## What it does
+## 元のプロジェクトからの変更点
 
-**Native, over BLE (no video, low power):**
-- **Turn-by-turn on the dash's own nav page.** You navigate in Google Maps as usual; the app reads Maps' ongoing navigation notification and relays each maneuver to the dash over BLE, which draws the arrow, road name, and distance natively. (Gadgetbridge-style relay — Maps does the routing; the app is a thin bridge. Requires granting Notification access.)
-- **Weather** near the dash clock (from the phone's location).
-- **Elevation** in the trip field.
-- **Clock sync** during the connection handshake.
+| 変更 | 内容 |
+|---|---|
+| **距離を km 表示に** | アプリ内の距離表示をマイル（MI / FT）から m / km に変更 |
+| **ルート選択画面（Google マップ風）** | 目的地を選ぶと、すぐにはナビを始めず、全画面の地図にルート候補（最大 3 本）を表示。所要時間・距離・到着時刻・最速との差・主な経由道路・高速/有料の有無を見比べてから **START** で開始 |
+| **高速・有料道路・フェリーの回避** | ルート選択画面の「AVOID HWY / AVOID TOLLS / AVOID FERRY」で切り替え（デフォルトは「使う」）。設定は保存され、ルートを外れたときの再検索にも適用される |
+| **日本語の目的地検索** | 入力にひらがな・カタカナ・漢字が含まれていれば日本語で検索する（元は英語固定だったため「東京駅」などの駅や施設が出てこなかった）。それ以外はスマホの言語設定に合わせる |
 
-**Optional, over Wi-Fi (video projection):**
-- **Full Mapbox map** rendered on the phone and streamed to the dash as H.264. Includes destination search with autocomplete and Mapbox routing. Turn-advance / off-route / reroute logic is implemented and bench-validated; on-road behavior at speed is still being confirmed.
-- **GPX course loading and following** — load a `.gpx` track, see it drawn on the map, and follow it with distance-remaining / off-course readouts. Validated stationary; the moving "progress ticking down" path is not yet road-tested.
+## できること
 
+メーターの操作方法は 2 通りあります。
+
+**① BLE で情報を送る（標準・省電力）**
+アプリが小さなデータを送り、メーター自身が描画します。映像は送らないので、バッテリー消費が少なくて済みます。
+- **メーターのナビ画面にターンバイターン表示**：Google マップでいつもどおりナビをすると、アプリが Google マップのナビ通知を読み取り、曲がる方向・道路名・距離をメーターに転送します（ルート計算は Google マップが行い、アプリは中継するだけです）。「通知へのアクセス」の許可が必要です
+- **天気**（スマホの位置情報から取得）
+- **標高**
+- **時計の同期**
+
+**② Wi-Fi で地図の映像を送る（オプション・電力多め）**
+- **Mapbox の地図をメーター全面に表示**：スマホで地図を描画し、H.264 の動画にしてメーターへ送ります。目的地検索とルート案内（上記のルート選択画面）もこちらです
+- **GPX コースの読み込みと追従**：`.gpx` ファイルを読み込み、地図に表示してコースに沿って走れます
 
 <img width="4080" height="3072" alt="PXL_20260805_160031324" src="https://github.com/user-attachments/assets/288146c8-c289-4032-b05f-5fcb7af6dc7d" />
 <img width="4080" height="3072" alt="PXL_20260805_160013337" src="https://github.com/user-attachments/assets/887909aa-7555-4045-a823-7939583a2256" />
 <img width="4080" height="3072" alt="PXL_20260805_155954768" src="https://github.com/user-attachments/assets/07f63268-71fa-4918-9f60-9f0b33e3ca28" />
 
+**接続のしくみ**
+- 接続時に一度だけ Wi-Fi を使ってメーターの表示機能を有効にします（電源を入れるたびに 1 回必要です）。そのあとは Wi-Fi を止めて **BLE だけで動きます**。映像モードをオンにしたときだけ、Wi-Fi が再び使われます
+- キーオフ → キーオンのあとは自動で再接続します（BLE が切れたあとの再接続には、数分かかることがあります）
 
-**Connection model:**
-- Connect brings Wi-Fi up once to activate the dash's native rendering (a control channel that must come up once per power-cycle), then **parks Wi-Fi and runs BLE-only** for the low-power steady state. A single **Project** toggle brings Wi-Fi back up and starts video on demand, and drops it again when you turn projection off.
-- Auto-reconnects after a key-off/key-on cycle. (Reconnect after a BLE drop can currently take a couple of minutes — tightening that is on the roadmap.)
+**対応していないもの**：メーターの車両データ（速度・走行距離・燃料・航続距離）の読み取り、空気圧（TPMS）表示、音楽や着信・通知の表示。
 
-A Python proof of concept in `proto-poc/` predates the app. It remains the reference implementation for the wire protocol and is handy for bench testing.
+## 使い方
 
-**Not supported / known non-features** (documented so you don't chase them): live vehicle telemetry from the dash (speed, odometer, fuel, range) is **not** read or displayed — the dash doesn't expose usable telemetry to the phone on this firmware. Tire-pressure (TPMS) display is gated behind a per-VIN cloud capability flag and does not work without it, even though the push protocol is understood (see [roadmap](docs/ROADMAP.md)). Music and call/notification mirroring get no response from this dash.
+1. アプリを起動し、Bluetooth・位置情報・通知を許可する
+2. メーターの Wi-Fi パスワードを入力して接続する（アプリ上部に「LINK ESTABLISHED」「RDY」と出れば接続完了）
+3. 使い方に合わせて選ぶ
+   - **Google マップのナビをメーターに出す**：アプリの「ENABLE TURN-BY-TURN」から KoveDash の「通知へのアクセス」を許可し、Google マップでナビを開始する
+   - **地図の映像をメーターに出す**：アプリで映像モードを開始し、**メーターの UP ボタンを約 2 秒長押し**する（取扱説明書には載っていますが、公式アプリには説明がない操作です）
 
-## Compatibility
+## 日本で使うときの注意
 
-There are two incompatible protocol families in the Kove dash ecosystem:
+- **Google マップのナビ転送は、通知が英語のときだけ正しく動きます。** 通知の文章（「Turn left onto …」など）から曲がる方向を判断する作りのためです。日本語の通知（「左折して…」）だと、方向が「不明」になります。
+  → 対策：Google マップの言語を英語にします。Android 13 以降なら、設定 → アプリ → Google マップ →「言語」で Google マップだけ英語にできる場合があります（音声案内も英語になります）
+- **メーターに日本語の道路名が表示できるかは未確認です。** 文字化けや空欄になる可能性があります
+- ルート選択画面の「via …」は、Mapbox の仕様で道路番号（例：`via 2, E2`）で表示されます
+- アプリの画面表示は英語のままです
 
-- **SiQi/ThinkerRide** — older dashes, including the 2022 `SV=3.0.4` unit this was built against. This is what the app speaks.
-- **Eryanet** — newer dashes. Different envelope, different BLE UUIDs, reversed TCP roles. Not supported yet, though the wire format is partially documented in [`proto-poc/PROTOCOL.md`](proto-poc/PROTOCOL.md).
+## 対応機種
 
-If you don't have the older-family hardware, the app won't talk to your dash end-to-end. Porting to Eryanet is the biggest open piece of work.
+Kove のメーターには、互換性のない 2 種類の通信方式があります。
 
-If you have any Kove dash, a hardware report helps regardless of firmware: the firmware string, a BLE scan (service `0000e0ff-...` means SiQi, `0000aaa0-...` means Eryanet), and the dash AP address. There's an [issue template](.github/ISSUE_TEMPLATE/) for it.
+- **SiQi / ThinkerRide**：古いメーター。作者が開発に使った 2022 年式（ファームウェア `SV=3.0.4`）はこちら。**このアプリが対応しているのはこちらだけです**
+- **Eryanet**：新しいメーター。まだ対応していません（通信方式の一部は [`proto-poc/PROTOCOL.md`](proto-poc/PROTOCOL.md) に記載があります）
 
-## How it works
+BLE スキャンでサービス `0000e0ff-...` が見えれば SiQi、`0000aaa0-...` なら Eryanet です。
+
+## しくみ
 
 ```
-  Phone (this app)                              Kove dash (Wi-Fi AP @ 192.168.10.1)
+  スマホ（このアプリ）                           Kove メーター（Wi-Fi AP @ 192.168.10.1）
   ┌────────────────────────────┐               ┌───────────────────────────────────┐
-  │ BLE client (ffe1/ffe2)     │ ◄── BLE ────► │ native widgets: turn arrow,        │
-  │                            │               │ weather, elevation, clock sync     │
-  │                            │ ── TCP 17818 ─►│ control channel (activates native  │
-  │ TCP servers (phone=server) │               │ rendering once per power-cycle)    │
+  │ BLE クライアント (ffe1/ffe2) │ ◄── BLE ────► │ 標準表示：曲がる方向、天気、        │
+  │                            │               │ 標高、時計の同期                    │
+  │                            │ ── TCP 17818 ─►│ 制御チャンネル（電源投入ごとに      │
+  │ TCP サーバー（スマホ側）     │               │ 1 回、表示機能を有効化）            │
   │                            │               │                                   │
-  │ optional video path:       │               │                                   │
-  │  Mapbox map → Presentation │               │                                   │
-  │   → VirtualDisplay         │ ── TCP 15456 ─►│ H.264 decoder → full-screen map    │
-  │   → MediaCodec (H.264)     │ ◄─ TCP 15457 ─►│ heartbeat                          │
+  │ 映像モード（オプション）：   │               │                                   │
+  │  Mapbox の地図 → 仮想画面   │ ── TCP 15456 ─►│ H.264 デコーダー → 全画面の地図    │
+  │   → H.264 に変換           │ ◄─ TCP 15457 ─►│ ハートビート                        │
   └────────────────────────────┘               └───────────────────────────────────┘
 ```
 
-The default steady state uses **only the BLE link** — the dash renders the widgets itself. The Wi-Fi/TCP path is brought up only for video projection. The phone is the TCP server; the dash dials in as a client.
+通常は **BLE だけ**で動き、表示はメーター自身が行います。Wi-Fi / TCP を使うのは映像モードのときだけです。TCP ではスマホがサーバー側になり、メーターから接続してきます。
 
-One step isn't obvious from the protocol: to start video projection, the rider long-presses **UP** on the dash to put it into projection mode, which is what makes it connect to the phone's video socket. That's in the Kove owner's manual but not in any of the companion apps. Details in [`proto-poc/PROTOCOL.md`](proto-poc/PROTOCOL.md).
+## ビルド方法
 
-## Building
+必要なもの：
+- **JDK 17 以上**（Android Studio に付属のものでかまいません）
+- **Android Studio** または Android のコマンドラインツール
+- **Mapbox のパブリックトークン（`pk.` で始まるもの）**：https://account.mapbox.com/ で無料アカウントを作ると、最初から 1 つ用意されています
 
-You need JDK 17, Android Studio or the command-line tools, and Mapbox tokens (the free tier is more than enough for personal use).
+> 💡 元の README ではシークレットトークン（`sk.`、DOWNLOADS:READ 権限）も必要と書かれています。ただ、2026 年 9 月時点では Mapbox の配布サーバーがトークンなしでもダウンロードを許可しているため、**`sk.` もクレジットカードの登録も不要**でした。将来ビルド時にダウンロードエラーが出るようになったら、`sk.` を作って設定してください。
 
 ```bash
-# 1. Create tokens at https://account.mapbox.com/ :
-#    a public token (pk.*) and a downloads token (sk.*) with DOWNLOADS:READ scope.
-# 2. Configure:
+# 1. 設定ファイルを作る
 cp app/local.properties.template app/local.properties
-#    edit app/local.properties: both tokens + your SDK path.
+#    app/local.properties を編集：
+#      sdk.dir=/Users/<you>/Library/Android/sdk
+#      MAPBOX_DOWNLOADS_TOKEN=            ← 空のままで OK
+#      MAPBOX_PUBLIC_TOKEN=pk.xxxxx       ← 自分のパブリックトークン
+#    ※ local.properties は Git の管理対象外なので、トークンがコミットされることはありません
 
-# 3. Build and install:
+# 2. ビルドしてスマホにインストール（USB デバッグを有効にしたスマホをつないでおく）
 cd app
+export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"   # macOS の場合
 ./gradlew :app:installDebug
 
-# 4. Unit tests (no hardware needed):
+# 3. 単体テスト（実機は不要）
 ./gradlew :app:testDebugUnitTest
 ```
 
-Most of the app can be developed and tested without the bike — UI, geocoding, routing, protocol encode/decode, and the encoder pipeline all run on an emulator. Hardware is only needed for the final dash round-trip. See [`CONTRIBUTING.md`](CONTRIBUTING.md).
+### Mapbox の料金について
+個人で使う分には無料枠に収まります（2026 年 9 月時点の Mapbox 料金ページより）。
 
-## Repository layout
-
-| Path | Contents |
+| 機能 | 毎月の無料枠 |
 |---|---|
-| `app/` | The Android app (Kotlin, Jetpack Compose) |
-| `proto-poc/` | Python proof of concept and bench tools; protocol reference implementation |
-| `proto-poc/PROTOCOL.md` | The reverse-engineered wire protocol, in full |
-| `docs/ARCHITECTURE.md` | How the app is structured |
-| `docs/ROADMAP.md` | Planned work and open questions |
-| `docs/re/` | Reverse-engineering reports (ThinkerRide, GreenTrip, Eryanet, projection encoder) |
+| 地図表示（モバイル） | 25,000 ユーザー |
+| ルート検索 | 100,000 回 |
+| 目的地の検索 | 2,500 セッション |
 
-## Safety and legal
+※ パブリックトークンは APK に埋め込まれます。**ビルドした APK を他人に配らないでください。** 他人の利用分があなたの無料枠から消費されます。
 
-This software drives a screen on a moving motorcycle. A frozen, wrong, or distracting display can contribute to a crash. Use it at your own risk, don't rely on it as your only navigation, and keep your eyes on the road. No warranty — see [LICENSE](LICENSE) §7–8.
+## フォルダ構成
 
-This is an independent interoperability project, not affiliated with or endorsed by Kove, SiQi, BlueStar, or Eryanet. The protocol was documented by observing traffic and analyzing publicly distributed companion apps, to interoperate with hardware I own. No proprietary or decompiled OEM code is included or redistributed — see [NOTICE](NOTICE).
+| パス | 内容 |
+|---|---|
+| `app/` | Android アプリ本体（Kotlin、Jetpack Compose） |
+| `proto-poc/` | Python で書かれた検証用ツール（通信方式の参照実装） |
+| `proto-poc/PROTOCOL.md` | 解析した通信方式の詳細 |
+| `docs/ARCHITECTURE.md` | アプリの構成 |
+| `docs/ROADMAP.md` | 今後の予定と未解決の課題 |
+| `docs/re/` | リバースエンジニアリングの調査レポート |
 
-I have not damaged a dash doing any of this, but sending unexpected input to embedded firmware always carries some risk. That risk is yours.
+## 安全と法的事項
 
-## Contributing
+このソフトウェアは、走行中のバイクの画面を操作します。表示が止まったり、間違っていたり、気が散る表示になったりすると、事故につながるおそれがあります。**自己責任で使用し、唯一のナビとして頼らず、運転中は前を見てください。** 無保証です（[LICENSE](LICENSE) 第 7〜8 条）。
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) and the [roadmap](docs/ROADMAP.md). The most useful things right now are Eryanet protocol support, hardware reports from other firmware revisions, faster BLE reconnect, and confirming the on-road nav paths (turn-advance at speed, GPX follow while moving).
+これは独立した非公式プロジェクトで、Kove、SiQi、BlueStar、Eryanet とは一切関係がなく、承認も受けていません。通信方式は、通信の観察と一般に配布されている公式アプリの解析によって調べられたもので、メーカーの独自コードや逆コンパイルしたコードは含まれていません（[NOTICE](NOTICE) 参照）。
 
-## License
+組み込み機器に想定外のデータを送ることには、常に一定のリスクがあります。そのリスクは利用者が負うものとします。
 
-Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+## ライセンス
+
+Apache License 2.0 — [LICENSE](LICENSE) と [NOTICE](NOTICE) を参照してください。
+
+- 元のプロジェクト：[ttarlov/kove-dash](https://github.com/ttarlov/kove-dash)（Copyright 2026 Taras Tarlov）
+- この日本向け改変版での変更は、上記「元のプロジェクトからの変更点」と Git の履歴に記録されています
