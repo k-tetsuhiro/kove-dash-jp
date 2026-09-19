@@ -1,3 +1,4 @@
+// Modified by k-tetsuhiro for kove-dash-jp (2026): org.json test dependency.
 import java.util.Properties
 
 plugins {
@@ -79,5 +80,7 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
 
     testImplementation(libs.junit)
+    // Real org.json for JVM unit tests — the android.jar stub throws "not mocked".
+    testImplementation(libs.org.json)
     testImplementation(libs.kotlinx.coroutines.test)
 }

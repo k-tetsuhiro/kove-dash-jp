@@ -1,3 +1,4 @@
+# Modified by k-tetsuhiro for kove-dash-jp (2026): org.json test dependency.
 [versions]
 agp = "8.7.3"
 kotlin = "2.0.21"
@@ -7,6 +8,7 @@ activityCompose = "1.9.3"
 composeBom = "2024.11.00"
 coroutines = "1.9.0"
 junit = "4.13.2"
+orgJson = "20240303"
 playServicesLocation = "21.3.0"
 mapboxMaps = "11.9.0"
 mapboxNavigation = "3.6.0"
@@ -26,6 +28,7 @@ androidx-compose-ui-text-google-fonts = { group = "androidx.compose.ui", name = 
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
+org-json = { group = "org.json", name = "json", version.ref = "orgJson" }
 play-services-location = { group = "com.google.android.gms", name = "play-services-location", version.ref = "playServicesLocation" }
 mapbox-maps-android = { group = "com.mapbox.maps", name = "android", version.ref = "mapboxMaps" }
 mapbox-maps-compose = { group = "com.mapbox.extension", name = "maps-compose", version.ref = "mapboxMaps" }

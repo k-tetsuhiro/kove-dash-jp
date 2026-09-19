@@ -1,7 +1,9 @@
+// Modified by k-tetsuhiro for kove-dash-jp (2026): persisted route options.
 package com.kovedash.app.service
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.kovedash.app.net.MapboxDirections
 
 /**
  * Tiny settings wrapper. V1 uses plain SharedPreferences; V1.1 will swap in
@@ -34,12 +36,28 @@ class KoveSettings(context: Context) {
         get() = prefs.getString(KEY_DASH_MAC, null)
         set(value) = prefs.edit().putString(KEY_DASH_MAC, value).apply()
 
+    // Route options (avoid highways / tolls / ferries). All false = use everything.
+    var routeOptions: MapboxDirections.Options
+        get() = MapboxDirections.Options(
+            avoidMotorways = prefs.getBoolean(KEY_AVOID_MOTORWAYS, false),
+            avoidTolls = prefs.getBoolean(KEY_AVOID_TOLLS, false),
+            avoidFerries = prefs.getBoolean(KEY_AVOID_FERRIES, false),
+        )
+        set(value) = prefs.edit()
+            .putBoolean(KEY_AVOID_MOTORWAYS, value.avoidMotorways)
+            .putBoolean(KEY_AVOID_TOLLS, value.avoidTolls)
+            .putBoolean(KEY_AVOID_FERRIES, value.avoidFerries)
+            .apply()
+
     companion object {
         private const val NAME = "kovedash.settings"
         private const val KEY_DASH_PASSWORD = "dash_password"
         private const val KEY_DASH_SSID_PREFIX = "dash_ssid_prefix"
         private const val KEY_DASH_EXACT_SSID = "dash_exact_ssid"
         private const val KEY_DASH_MAC = "dash_mac"
+        private const val KEY_AVOID_MOTORWAYS = "avoid_motorways"
+        private const val KEY_AVOID_TOLLS = "avoid_tolls"
+        private const val KEY_AVOID_FERRIES = "avoid_ferries"
         const val DEFAULT_SSID_PREFIX = "CQKY_"
     }
 }

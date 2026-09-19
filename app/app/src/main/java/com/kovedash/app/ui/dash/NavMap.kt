@@ -1,3 +1,4 @@
+// Modified by k-tetsuhiro for kove-dash-jp (2026): draw and tap-select route preview candidates.
 package com.kovedash.app.ui.dash
 
 import androidx.compose.foundation.Canvas
@@ -31,17 +32,25 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.setViewTreeLifecycleOwner
 import com.mapbox.geojson.Feature
+import com.mapbox.geojson.FeatureCollection
 import com.mapbox.geojson.LineString
 import com.mapbox.geojson.Point
 import com.mapbox.maps.CameraOptions
 import com.mapbox.maps.CoordinateBounds
 import com.mapbox.maps.EdgeInsets
 import com.mapbox.maps.MapView
+import com.mapbox.maps.RenderedQueryGeometry
+import com.mapbox.maps.RenderedQueryOptions
+import com.mapbox.maps.ScreenBox
+import com.mapbox.maps.ScreenCoordinate
 import com.mapbox.maps.Style
+import com.mapbox.maps.extension.style.expressions.generated.Expression
 import com.mapbox.maps.extension.style.layers.addLayer
 import com.mapbox.maps.extension.style.layers.generated.lineLayer
+import com.mapbox.maps.extension.style.layers.generated.symbolLayer
 import com.mapbox.maps.extension.style.layers.properties.generated.LineCap
 import com.mapbox.maps.extension.style.layers.properties.generated.LineJoin
+import com.mapbox.maps.extension.style.layers.properties.generated.SymbolPlacement
 import com.mapbox.maps.extension.style.sources.addSource
 import com.mapbox.maps.extension.style.sources.generated.GeoJsonSource
 import com.mapbox.maps.extension.style.sources.generated.geoJsonSource
@@ -49,15 +58,19 @@ import com.mapbox.maps.extension.style.sources.getSourceAs
 import com.mapbox.maps.plugin.PuckBearing
 import com.mapbox.maps.plugin.animation.MapAnimationOptions
 import com.mapbox.maps.plugin.animation.easeTo
+import com.mapbox.maps.plugin.gestures.addOnMapClickListener
 import com.mapbox.maps.plugin.locationcomponent.createDefault2DPuck
 import com.mapbox.maps.plugin.locationcomponent.location
 import com.kovedash.app.AppHost
 import com.kovedash.app.nav.ActiveRoute
 import com.kovedash.app.nav.GpxCourse
 import com.kovedash.app.nav.Navigator
+import com.kovedash.app.nav.RoutePreview
+import com.kovedash.app.nav.cumulativeMeters
 import com.kovedash.app.ui.theme.KoveColors
 import com.kovedash.app.ui.theme.KoveFonts
 import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 
 /**
  * Mapbox MapView wrapped for both the dash Presentation and the in-app tab. Reads
@@ -83,6 +96,10 @@ fun NavMap(
     val gpsFix by AppHost.gps.collectAsState()
     val activeRoute by Navigator.activeRoute.collectAsState()
     val gpxCourse by Navigator.gpxCourse.collectAsState()
+    val preview by Navigator.preview.collectAsState()
+    // Route previews are an in-app affair: the dash keeps showing the live route (if any)
+    // while the rider compares alternatives on the phone.
+    val shownPreview = if (keepAlive) null else preview
     val dashView by AppHost.dashView.collectAsState()
     var mapView by remember { mutableStateOf<MapView?>(null) }
     var snappedToFirstFix by remember { mutableStateOf(false) }
@@ -132,9 +149,35 @@ fun NavMap(
     // Route polyline: re-render whenever the active route changes (set / cleared / new
     // destination). `getStyle` defers until the style is loaded, so we don't race the
     // initial loadStyle call in the AndroidView factory.
-    LaunchedEffect(activeRoute, mapView) {
+    // While previewing, the in-app map swaps the live route for the candidates.
+    LaunchedEffect(activeRoute, shownPreview, mapView) {
         val mv = mapView ?: return@LaunchedEffect
-        mv.mapboxMap.getStyle { style -> renderRouteLine(style, activeRoute) }
+        mv.mapboxMap.getStyle { style ->
+            renderRouteLine(style, if (shownPreview != null) null else activeRoute)
+            renderPreviewLines(style, shownPreview)
+        }
+    }
+
+    // Fit the camera to all candidates whenever a new set arrives (not on selection
+    // change — tapping between alternatives shouldn't make the map jump). Flat and
+    // north-up, like Google Maps' route overview.
+    LaunchedEffect(shownPreview?.routes, mapView) {
+        val mv = mapView ?: return@LaunchedEffect
+        val routes = shownPreview?.routes.orEmpty()
+        if (routes.isEmpty()) return@LaunchedEffect
+        delay(150)
+        var minLat = 90.0; var maxLat = -90.0; var minLon = 180.0; var maxLon = -180.0
+        routes.forEach { r ->
+            r.coords.forEach {
+                minLat = minOf(minLat, it.latitude()); maxLat = maxOf(maxLat, it.latitude())
+                minLon = minOf(minLon, it.longitude()); maxLon = maxOf(maxLon, it.longitude())
+            }
+        }
+        val cam = mv.mapboxMap.cameraForCoordinateBounds(
+            CoordinateBounds(Point.fromLngLat(minLon, minLat), Point.fromLngLat(maxLon, maxLat)),
+            EdgeInsets(70.0, 50.0, 70.0, 50.0), 0.0, 0.0,
+        )
+        mv.mapboxMap.easeTo(cam, MapAnimationOptions.mapAnimationOptions { duration(700L) })
     }
 
     // GPX course line (adventure mode). Re-render on load/clear. On the in-app map
@@ -174,7 +217,8 @@ fun NavMap(
         if (!appliedViewOnce) { appliedViewOnce = true; return@LaunchedEffect }
         mv.mapboxMap.loadStyle(dashView.styleUri) { style ->
             applyPuck(mv)
-            renderRouteLine(style, activeRoute)
+            renderRouteLine(style, if (shownPreview != null) null else activeRoute)
+            renderPreviewLines(style, shownPreview)
         }
         gpsFix?.let { fix ->
             mv.mapboxMap.easeTo(
@@ -214,6 +258,7 @@ fun NavMap(
                     // and read at a glance; Outdoors adds terrain + trails for backcountry.
                     mv.mapboxMap.loadStyle(dashView.styleUri)
                     applyPuck(mv)
+                    if (!keepAlive) mv.enableAlternativeTap()
                     mapView = mv
                 }
             },
@@ -269,12 +314,15 @@ fun NavMap(
                     )
                 },
             )
-            ViewCycleButton(label = dashView.label, onClick = { AppHost.cycleDashView() })
-            GpxButton(
-                course = gpxCourse,
-                onLoad = { AppHost.requestGpxPick() },
-                onClear = { AppHost.clearGpxCourse() },
-            )
+            // Style/GPX controls stay out of the route preview — it's for comparing routes.
+            if (shownPreview == null) {
+                ViewCycleButton(label = dashView.label, onClick = { AppHost.cycleDashView() })
+                GpxButton(
+                    course = gpxCourse,
+                    onLoad = { AppHost.requestGpxPick() },
+                    onClear = { AppHost.clearGpxCourse() },
+                )
+            }
             // Course-following HUD on the in-app map too, so progress + off-course are
             // visible without projecting. Off-course banner spans the top; the readout
             // sits mid-right, clear of both the banner and the bottom buttons.
@@ -488,3 +536,147 @@ private fun renderRouteLine(style: com.mapbox.maps.Style, route: ActiveRoute?) {
     )
 }
 
+private const val PREVIEW_ALT_SOURCE_ID = "kove.preview.alt.src"
+private const val PREVIEW_ALT_LAYER_ID = "kove.preview.alt.layer"
+private const val PREVIEW_ALT_CASING_LAYER_ID = "kove.preview.alt.casing"
+private const val PREVIEW_SEL_SOURCE_ID = "kove.preview.sel.src"
+private const val PREVIEW_SEL_LAYER_ID = "kove.preview.sel.layer"
+private const val PREVIEW_SEL_CASING_LAYER_ID = "kove.preview.sel.casing"
+private const val PREVIEW_LABEL_SOURCE_ID = "kove.preview.label.src"
+private const val PREVIEW_LABEL_LAYER_ID = "kove.preview.label.layer"
+private const val PROP_ROUTE_INDEX = "idx"
+
+/**
+ * Tapping near a grey alternative on the in-app map selects it (Google Maps behavior).
+ * The query is async, so the click is never consumed — panning etc. still work.
+ */
+private fun MapView.enableAlternativeTap() {
+    mapboxMap.addOnMapClickListener { point ->
+        val p = Navigator.preview.value
+        if (p == null || p.routes.size < 2) return@addOnMapClickListener false
+        val px = mapboxMap.pixelForCoordinate(point)
+        val slop = 24.0
+        val box = ScreenBox(ScreenCoordinate(px.x - slop, px.y - slop), ScreenCoordinate(px.x + slop, px.y + slop))
+        mapboxMap.queryRenderedFeatures(
+            RenderedQueryGeometry(box),
+            RenderedQueryOptions(listOf(PREVIEW_ALT_LAYER_ID, PREVIEW_LABEL_LAYER_ID), null),
+        ) { result ->
+            val idx = result.value
+                ?.firstNotNullOfOrNull { it.queriedFeature.feature.getNumberProperty(PROP_ROUTE_INDEX) }
+                ?.toInt() ?: return@queryRenderedFeatures
+            Navigator.selectPreviewRoute(idx)
+        }
+        false
+    }
+}
+
+/**
+ * Draws route candidates: alternatives in grey underneath, the selected one in blue on
+ * top (both with a darker casing), plus a duration bubble on each. Null removes it all.
+ */
+private fun renderPreviewLines(style: Style, preview: RoutePreview?) {
+    val layers = listOf(
+        PREVIEW_LABEL_LAYER_ID, PREVIEW_SEL_LAYER_ID, PREVIEW_SEL_CASING_LAYER_ID,
+        PREVIEW_ALT_LAYER_ID, PREVIEW_ALT_CASING_LAYER_ID,
+    )
+    val sources = listOf(PREVIEW_LABEL_SOURCE_ID, PREVIEW_SEL_SOURCE_ID, PREVIEW_ALT_SOURCE_ID)
+    if (preview == null || preview.routes.isEmpty()) {
+        layers.forEach { style.removeStyleLayer(it) }
+        sources.forEach { style.removeStyleSource(it) }
+        return
+    }
+    val sel = preview.selectedIndex
+    val alts = FeatureCollection.fromFeatures(
+        preview.routes.mapIndexedNotNull { i, r ->
+            if (i == sel || r.coords.size < 2) null
+            else Feature.fromGeometry(LineString.fromLngLats(r.coords)).apply { addNumberProperty(PROP_ROUTE_INDEX, i) }
+        }
+    )
+    val selected = preview.routes[sel].coords.takeIf { it.size >= 2 }
+        ?.let { FeatureCollection.fromFeature(Feature.fromGeometry(LineString.fromLngLats(it))) }
+        ?: FeatureCollection.fromFeatures(emptyList())
+    val labels = FeatureCollection.fromFeatures(
+        preview.routes.mapIndexedNotNull { i, r ->
+            val at = labelPoint(r.coords) ?: return@mapIndexedNotNull null
+            Feature.fromGeometry(at).apply {
+                addNumberProperty(PROP_ROUTE_INDEX, i)
+                addStringProperty("label", formatPreviewDuration(r.durationSeconds))
+                addBooleanProperty("sel", i == sel)
+            }
+        }
+    )
+
+    val altSrc = style.getSourceAs<GeoJsonSource>(PREVIEW_ALT_SOURCE_ID)
+    if (altSrc != null) {
+        altSrc.featureCollection(alts)
+        style.getSourceAs<GeoJsonSource>(PREVIEW_SEL_SOURCE_ID)?.featureCollection(selected)
+        style.getSourceAs<GeoJsonSource>(PREVIEW_LABEL_SOURCE_ID)?.featureCollection(labels)
+        return
+    }
+    style.addSource(geoJsonSource(PREVIEW_ALT_SOURCE_ID) { featureCollection(alts) })
+    style.addSource(geoJsonSource(PREVIEW_SEL_SOURCE_ID) { featureCollection(selected) })
+    style.addSource(geoJsonSource(PREVIEW_LABEL_SOURCE_ID) { featureCollection(labels) })
+    style.addLayer(
+        lineLayer(PREVIEW_ALT_CASING_LAYER_ID, PREVIEW_ALT_SOURCE_ID) {
+            lineColor("#7C8594"); lineWidth(11.0); lineCap(LineCap.ROUND); lineJoin(LineJoin.ROUND)
+        }
+    )
+    style.addLayer(
+        lineLayer(PREVIEW_ALT_LAYER_ID, PREVIEW_ALT_SOURCE_ID) {
+            lineColor("#B7C0CC"); lineWidth(8.0); lineCap(LineCap.ROUND); lineJoin(LineJoin.ROUND)
+        }
+    )
+    style.addLayer(
+        lineLayer(PREVIEW_SEL_CASING_LAYER_ID, PREVIEW_SEL_SOURCE_ID) {
+            lineColor("#0D47A1"); lineWidth(12.0); lineCap(LineCap.ROUND); lineJoin(LineJoin.ROUND)
+        }
+    )
+    style.addLayer(
+        lineLayer(PREVIEW_SEL_LAYER_ID, PREVIEW_SEL_SOURCE_ID) {
+            lineColor("#1E88E5"); lineWidth(8.0); lineCap(LineCap.ROUND); lineJoin(LineJoin.ROUND)
+        }
+    )
+    style.addLayer(
+        symbolLayer(PREVIEW_LABEL_LAYER_ID, PREVIEW_LABEL_SOURCE_ID) {
+            symbolPlacement(SymbolPlacement.POINT)
+            textField(Expression.get("label"))
+            textFont(listOf("DIN Pro Bold", "Arial Unicode MS Bold"))
+            textSize(14.0)
+            textColor(
+                Expression.switchCase(
+                    Expression.get("sel"), Expression.color(android.graphics.Color.WHITE),
+                    Expression.color(android.graphics.Color.parseColor("#20242B")),
+                )
+            )
+            textHaloColor(
+                Expression.switchCase(
+                    Expression.get("sel"), Expression.color(android.graphics.Color.parseColor("#1E88E5")),
+                    Expression.color(android.graphics.Color.WHITE),
+                )
+            )
+            textHaloWidth(3.0)
+            textAllowOverlap(true)
+            textIgnorePlacement(true)
+            symbolSortKey(Expression.switchCase(Expression.get("sel"), Expression.literal(1.0), Expression.literal(0.0)))
+        }
+    )
+}
+
+/**
+ * Where to hang a route's duration bubble: halfway along it by distance. Alternatives
+ * share their start and end, so the midpoint is where they're most likely to diverge.
+ */
+private fun labelPoint(coords: List<Point>): Point? {
+    if (coords.size < 2) return null
+    val cum = cumulativeMeters(coords)
+    val half = cum.last() / 2
+    val i = cum.indexOfFirst { it >= half }.coerceAtLeast(1)
+    return coords[i]
+}
+
+/** "45 MIN" / "1 H 05" — the bubble on each preview route. */
+internal fun formatPreviewDuration(seconds: Double): String {
+    val totalMin = (seconds / 60.0).roundToInt().coerceAtLeast(1)
+    if (totalMin < 60) return "$totalMin MIN"
+    return "%d H %02d".format(totalMin / 60, totalMin % 60)
+}

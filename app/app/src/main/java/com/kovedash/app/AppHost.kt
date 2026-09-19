@@ -1,3 +1,4 @@
+// Modified by k-tetsuhiro for kove-dash-jp (2026): restore saved route options on attach.
 package com.kovedash.app
 
 import android.content.ComponentName
@@ -52,6 +53,7 @@ object AppHost {
         appContext = context.applicationContext
         settings = KoveSettings(context.applicationContext).also { s ->
             _state.update { it.copy(savedDashPassword = s.dashPassword, savedSsidPrefix = s.dashSsidPrefix) }
+            Navigator.bindRouteOptions(s.routeOptions) { s.routeOptions = it }
         }
         gpsSource = GpsSource(context.applicationContext)
         startGpsIfPermitted()

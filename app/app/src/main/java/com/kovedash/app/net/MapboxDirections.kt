@@ -1,3 +1,4 @@
+// Modified by k-tetsuhiro for kove-dash-jp (2026): alternatives, avoid options, route summary/road classes.
 package com.kovedash.app.net
 
 import android.util.Log
@@ -24,7 +25,29 @@ object MapboxDirections {
         val distanceMeters: Double,
         val durationSeconds: Double,
         val steps: List<Step>,
+        /** Mapbox's leg summary — the major roads the route uses, e.g. "I-25, US-36". */
+        val summary: String = "",
+        /** Road classes the route touches (from step intersections), for badges. */
+        val usesMotorway: Boolean = false,
+        val usesToll: Boolean = false,
+        val usesFerry: Boolean = false,
     )
+
+    /**
+     * Road types to route around, mapped to the Directions `exclude` parameter. All off by
+     * default — like Google Maps, highways/tolls/ferries are used unless the rider opts out.
+     */
+    data class Options(
+        val avoidMotorways: Boolean = false,
+        val avoidTolls: Boolean = false,
+        val avoidFerries: Boolean = false,
+    ) {
+        internal fun excludeParam(): String? = buildList {
+            if (avoidMotorways) add("motorway")
+            if (avoidTolls) add("toll")
+            if (avoidFerries) add("ferry")
+        }.takeIf { it.isNotEmpty() }?.joinToString(",")
+    }
 
     /**
      * One turn-by-turn maneuver from the Directions API. [location] is the point at which
@@ -46,14 +69,33 @@ object MapboxDirections {
         val location: Point,
     )
 
-    suspend fun fetch(origin: Point, destination: Point): Route? = withContext(Dispatchers.IO) {
+    /** Single best route — used for reroutes, where there's no one to pick an alternative. */
+    suspend fun fetch(origin: Point, destination: Point, options: Options = Options()): Route? =
+        fetchRoutes(origin, destination, options, alternatives = false).firstOrNull()
+
+    /**
+     * Route plus up to two alternatives (Mapbox caps alternatives at 3 routes total), best
+     * first. A request with alternatives still bills as one Directions request. Empty on
+     * any failure.
+     */
+    suspend fun fetchRoutes(
+        origin: Point,
+        destination: Point,
+        options: Options = Options(),
+        alternatives: Boolean = true,
+    ): List<Route> = withContext(Dispatchers.IO) {
         val token = BuildConfig.MAPBOX_PUBLIC_TOKEN
         if (token.isBlank()) {
             Log.w(TAG, "no MAPBOX_PUBLIC_TOKEN at runtime — directions disabled")
-            return@withContext null
+            return@withContext emptyList()
         }
         val coords = "${origin.longitude()},${origin.latitude()};${destination.longitude()},${destination.latitude()}"
-        val url = URL("https://api.mapbox.com/directions/v5/mapbox/driving/$coords?geometries=geojson&overview=full&steps=true&access_token=$token")
+        val exclude = options.excludeParam()?.let { "&exclude=$it" } ?: ""
+        val url = URL(
+            "https://api.mapbox.com/directions/v5/mapbox/driving/$coords" +
+                "?geometries=geojson&overview=full&steps=true" +
+                "&alternatives=$alternatives$exclude&access_token=$token"
+        )
         val conn = url.openConnection() as HttpURLConnection
         try {
             conn.connectTimeout = 5_000
@@ -62,23 +104,25 @@ object MapboxDirections {
             val code = conn.responseCode
             if (code != 200) {
                 Log.w(TAG, "directions http $code")
-                return@withContext null
+                return@withContext emptyList()
             }
             val body = conn.inputStream.bufferedReader().use { it.readText() }
-            parse(body)
+            parseRoutes(body)
         } catch (t: Throwable) {
             Log.e(TAG, "directions failed", t)
-            null
+            emptyList()
         } finally {
             runCatching { conn.disconnect() }
         }
     }
 
-    private fun parse(body: String): Route? {
-        val root = runCatching { JSONObject(body) }.getOrNull() ?: return null
-        val routes = root.optJSONArray("routes") ?: return null
-        if (routes.length() == 0) return null
-        val r0 = routes.optJSONObject(0) ?: return null
+    internal fun parseRoutes(body: String): List<Route> {
+        val root = runCatching { JSONObject(body) }.getOrNull() ?: return emptyList()
+        val routes = root.optJSONArray("routes") ?: return emptyList()
+        return (0 until routes.length()).mapNotNull { i -> routes.optJSONObject(i)?.let(::parseRoute) }
+    }
+
+    private fun parseRoute(r0: JSONObject): Route? {
         val geom = r0.optJSONObject("geometry") ?: return null
         val arr = geom.optJSONArray("coordinates") ?: return null
         val pts = ArrayList<Point>(arr.length())
@@ -88,12 +132,41 @@ object MapboxDirections {
             pts += Point.fromLngLat(c.getDouble(0), c.getDouble(1))
         }
         if (pts.isEmpty()) return null
+        val classes = roadClasses(r0)
         return Route(
             coords = pts,
             distanceMeters = r0.optDouble("distance", 0.0),
             durationSeconds = r0.optDouble("duration", 0.0),
             steps = parseSteps(r0),
+            summary = legSummary(r0),
+            usesMotorway = "motorway" in classes,
+            usesToll = "toll" in classes,
+            usesFerry = "ferry" in classes,
         )
+    }
+
+    private fun legSummary(routeJson: JSONObject): String {
+        val legs = routeJson.optJSONArray("legs") ?: return ""
+        return (0 until legs.length())
+            .mapNotNull { legs.optJSONObject(it)?.optString("summary")?.takeIf(String::isNotBlank) }
+            .joinToString(", ")
+    }
+
+    /** Union of every intersection's `classes` (motorway / toll / ferry / …) on the route. */
+    private fun roadClasses(routeJson: JSONObject): Set<String> {
+        val out = HashSet<String>()
+        val legs = routeJson.optJSONArray("legs") ?: return out
+        for (li in 0 until legs.length()) {
+            val steps = legs.optJSONObject(li)?.optJSONArray("steps") ?: continue
+            for (si in 0 until steps.length()) {
+                val ints = steps.optJSONObject(si)?.optJSONArray("intersections") ?: continue
+                for (ii in 0 until ints.length()) {
+                    val cls = ints.optJSONObject(ii)?.optJSONArray("classes") ?: continue
+                    for (ci in 0 until cls.length()) out += cls.optString(ci)
+                }
+            }
+        }
+        return out
     }
 
     private fun parseSteps(routeJson: JSONObject): List<Step> {

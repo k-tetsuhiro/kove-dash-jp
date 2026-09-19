@@ -1,3 +1,4 @@
+// Modified by k-tetsuhiro for kove-dash-jp (2026): full-screen route preview overlay.
 package com.kovedash.app
 
 import android.Manifest
@@ -30,7 +31,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mapbox.common.MapboxOptions
 import com.kovedash.app.service.ConnectionPhase
 import com.kovedash.app.ui.ConnectScreen
+import com.kovedash.app.nav.Navigator
 import com.kovedash.app.ui.FullscreenSearch
+import com.kovedash.app.ui.RoutePreviewScreen
 import com.kovedash.app.ui.PasswordDialog
 import com.kovedash.app.ui.SettingsScreen
 import com.kovedash.app.ui.SplashScreen
@@ -203,6 +206,13 @@ private fun App() {
                     onSubmit = AppHost::savePasswordAndConnect,
                     onDismiss = AppHost::dismissPasswordPrompt,
                 )
+            }
+            // Route preview takes over the whole screen (Google Maps-style: big map, route
+            // cards underneath) rather than squeezing into the Map tab between the header
+            // and the action rail.
+            val preview by Navigator.preview.collectAsStateWithLifecycle()
+            if (preview != null && !state.showSettings) {
+                RoutePreviewScreen(modifier = Modifier.fillMaxSize())
             }
             // Order matters: drawn last so it covers everything else. Surface stacks
             // its children Box-style.

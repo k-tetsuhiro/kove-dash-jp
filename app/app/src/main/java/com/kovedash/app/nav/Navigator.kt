@@ -1,3 +1,4 @@
+// Modified by k-tetsuhiro for kove-dash-jp (2026): route preview with alternatives, avoid options.
 package com.kovedash.app.nav
 
 import android.util.Log
@@ -44,6 +45,25 @@ object Navigator {
 
     private val _progress = MutableStateFlow<RouteProgress?>(null)
     val progress: StateFlow<RouteProgress?> = _progress
+
+    // Route preview (Google Maps-style): picking a destination fetches the route plus
+    // alternatives and parks them here for the rider to compare. Nothing is navigated —
+    // and any route already running keeps running — until [startPreview].
+    private val _preview = MutableStateFlow<RoutePreview?>(null)
+    val preview: StateFlow<RoutePreview?> = _preview
+    private var previewJob: Job? = null
+
+    // Avoid-highways/tolls/ferries. Applies to previews AND reroutes, so a reroute never
+    // sneaks the rider onto a road type they opted out of. Persisted via [bindRouteOptions].
+    private val _routeOptions = MutableStateFlow(MapboxDirections.Options())
+    val routeOptions: StateFlow<MapboxDirections.Options> = _routeOptions
+    private var persistRouteOptions: ((MapboxDirections.Options) -> Unit)? = null
+
+    /** Seed the saved route options and register where changes are persisted. */
+    fun bindRouteOptions(initial: MapboxDirections.Options, persist: (MapboxDirections.Options) -> Unit) {
+        _routeOptions.value = initial
+        persistRouteOptions = persist
+    }
 
     // A loaded GPX course to follow (adventure mode). Independent of the Directions
     // route: it's a fixed line the rider loaded, drawn in its own color. NavMap fits the
@@ -97,6 +117,9 @@ object Navigator {
                 if (fix == null) return@collect
                 if (_destination.value != null && _routeStatus.value == RouteStatus.WaitingForGps) {
                     refetchRoute()
+                }
+                if (_preview.value?.status == PreviewStatus.WaitingForGps) {
+                    fetchPreview()
                 }
                 advanceProgress(fix.lat, fix.lon)
                 checkOffRoute(fix.lat, fix.lon)
@@ -218,6 +241,76 @@ object Navigator {
         _progress.value = RouteProgress(upcomingIdx, steps[upcomingIdx], dist, distRemaining, etaSeconds)
     }
 
+    /** Fetch route + alternatives to [d] for the rider to compare before starting. */
+    fun previewDestination(d: Destination) {
+        Log.i(TAG, "preview: ${d.name} (${d.point.longitude()},${d.point.latitude()})")
+        _preview.value = RoutePreview(destination = d, routes = emptyList(), selectedIndex = 0, status = PreviewStatus.Fetching)
+        fetchPreview()
+    }
+
+    fun selectPreviewRoute(index: Int) {
+        val p = _preview.value ?: return
+        if (index !in p.routes.indices) return
+        _preview.value = p.copy(selectedIndex = index)
+    }
+
+    fun setRouteOptions(options: MapboxDirections.Options) {
+        if (options == _routeOptions.value) return
+        _routeOptions.value = options
+        persistRouteOptions?.invoke(options)
+        // Re-query the open preview so the cards reflect the new avoid settings.
+        if (_preview.value != null) fetchPreview()
+    }
+
+    fun cancelPreview() {
+        previewJob?.cancel()
+        previewJob = null
+        _preview.value = null
+    }
+
+    /** Retry a preview whose fetch failed. */
+    fun retryPreview() {
+        if (_preview.value != null) fetchPreview()
+    }
+
+    /** Commit the selected preview route: it replaces any running navigation. */
+    fun startPreview() {
+        val p = _preview.value ?: return
+        val route = p.routes.getOrNull(p.selectedIndex) ?: return
+        cancelPreview()
+        resetNavigation()
+        Log.i(TAG, "destination set: ${p.destination.name} (route ${p.selectedIndex + 1}/${p.routes.size})")
+        _destination.value = p.destination
+        val gps = AppHost.gps.value
+        val from = route.coords.first()
+        activateRoute(p.destination, route, gps?.lat ?: from.latitude(), gps?.lon ?: from.longitude())
+    }
+
+    private fun fetchPreview() {
+        previewJob?.cancel()
+        val p = _preview.value ?: return
+        val gps = AppHost.gps.value
+        if (gps == null) {
+            _preview.value = p.copy(routes = emptyList(), selectedIndex = 0, status = PreviewStatus.WaitingForGps)
+            return
+        }
+        _preview.value = p.copy(status = PreviewStatus.Fetching)
+        val origin = Point.fromLngLat(gps.lon, gps.lat)
+        val options = _routeOptions.value
+        previewJob = scope.launch {
+            val routes = MapboxDirections.fetchRoutes(origin, p.destination.point, options)
+            val cur = _preview.value
+            if (cur == null || cur.destination != p.destination) return@launch
+            _preview.value = if (routes.isEmpty()) {
+                Log.w(TAG, "preview fetch failed for ${p.destination.name}")
+                cur.copy(routes = emptyList(), selectedIndex = 0, status = PreviewStatus.Error)
+            } else {
+                Log.i(TAG, "preview: ${routes.size} route(s), best ${"%.1f".format(routes[0].distanceMeters / 1000)}km")
+                cur.copy(routes = routes, selectedIndex = 0, status = PreviewStatus.Ready)
+            }
+        }
+    }
+
     fun setDestination(d: Destination) {
         Log.i(TAG, "destination set: ${d.name} (${d.point.longitude()},${d.point.latitude()})")
         _destination.value = d
@@ -230,6 +323,10 @@ object Navigator {
 
     fun clearDestination() {
         Log.i(TAG, "destination cleared")
+        resetNavigation()
+    }
+
+    private fun resetNavigation() {
         routeJob?.cancel()
         routeJob = null
         retryJob?.cancel()
@@ -256,7 +353,7 @@ object Navigator {
         val origin = Point.fromLngLat(gps.lon, gps.lat)
         _routeStatus.value = if (rerouting) RouteStatus.Rerouting else RouteStatus.Fetching
         routeJob = scope.launch {
-            val route = MapboxDirections.fetch(origin, dest.point)
+            val route = MapboxDirections.fetch(origin, dest.point, _routeOptions.value)
             if (route == null) {
                 Log.w(TAG, "route fetch failed for ${dest.name}")
                 _routeStatus.value = RouteStatus.Error
@@ -266,37 +363,42 @@ object Navigator {
                 scheduleRouteRetry(rerouting)
                 return@launch
             }
-            _activeRoute.value = ActiveRoute(
-                destination = dest,
-                coords = route.coords,
-                distanceMeters = route.distanceMeters,
-                durationSeconds = route.durationSeconds,
-                steps = route.steps,
-            )
-            // Precompute along-route geometry for progress tracking.
-            cumMeters = cumulativeMeters(route.coords)
-            stepAlong = DoubleArray(route.steps.size) { k ->
-                alongRouteMeters(route.coords, cumMeters, route.steps[k].location.latitude(), route.steps[k].location.longitude())
-            }
-            _routeStatus.value = RouteStatus.Active
-            retryBackoffMs = ROUTE_RETRY_MIN_MS
-            // Seed progress at step 1 (skip the "depart" pseudo-step) and refresh
-            // immediately so the banner has data before the next GPS tick lands.
-            _progress.value = if (route.steps.size >= 2) {
-                RouteProgress(
-                    upcomingStepIndex = 1,
-                    step = route.steps[1],
-                    distanceToManeuverMeters = haversineMeters(
-                        gps.lat, gps.lon,
-                        route.steps[1].location.latitude(),
-                        route.steps[1].location.longitude(),
-                    ),
-                    distanceRemainingMeters = route.distanceMeters,
-                    etaSeconds = route.durationSeconds,
-                )
-            } else null
-            Log.i(TAG, "route active: ${route.coords.size} pts, ${route.steps.size} steps, ${"%.1f".format(route.distanceMeters / 1000)}km")
+            activateRoute(dest, route, gps.lat, gps.lon)
         }
+    }
+
+    /** Make [route] the one being navigated, rider currently at ([lat], [lon]). */
+    private fun activateRoute(dest: Destination, route: MapboxDirections.Route, lat: Double, lon: Double) {
+        _activeRoute.value = ActiveRoute(
+            destination = dest,
+            coords = route.coords,
+            distanceMeters = route.distanceMeters,
+            durationSeconds = route.durationSeconds,
+            steps = route.steps,
+        )
+        // Precompute along-route geometry for progress tracking.
+        cumMeters = cumulativeMeters(route.coords)
+        stepAlong = DoubleArray(route.steps.size) { k ->
+            alongRouteMeters(route.coords, cumMeters, route.steps[k].location.latitude(), route.steps[k].location.longitude())
+        }
+        _routeStatus.value = RouteStatus.Active
+        retryBackoffMs = ROUTE_RETRY_MIN_MS
+        // Seed progress at step 1 (skip the "depart" pseudo-step) and refresh
+        // immediately so the banner has data before the next GPS tick lands.
+        _progress.value = if (route.steps.size >= 2) {
+            RouteProgress(
+                upcomingStepIndex = 1,
+                step = route.steps[1],
+                distanceToManeuverMeters = haversineMeters(
+                    lat, lon,
+                    route.steps[1].location.latitude(),
+                    route.steps[1].location.longitude(),
+                ),
+                distanceRemainingMeters = route.distanceMeters,
+                etaSeconds = route.durationSeconds,
+            )
+        } else null
+        Log.i(TAG, "route active: ${route.coords.size} pts, ${route.steps.size} steps, ${"%.1f".format(route.distanceMeters / 1000)}km")
     }
 
     /**
@@ -393,6 +495,16 @@ data class RouteProgress(
 )
 
 enum class RouteStatus { Idle, WaitingForGps, Fetching, Rerouting, Active, Error }
+
+/** Candidate routes to a destination, awaiting the rider's pick. routes[0] is Mapbox's best. */
+data class RoutePreview(
+    val destination: Destination,
+    val routes: List<MapboxDirections.Route>,
+    val selectedIndex: Int,
+    val status: PreviewStatus,
+)
+
+enum class PreviewStatus { WaitingForGps, Fetching, Ready, Error }
 
 internal fun haversineMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
     val r = 6_371_000.0

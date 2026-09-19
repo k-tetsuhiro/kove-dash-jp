@@ -1,3 +1,4 @@
+// Modified by k-tetsuhiro for kove-dash-jp (2026): search language follows the query script / phone locale.
 package com.kovedash.app.net
 
 import android.util.Log
@@ -8,6 +9,7 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.util.Locale
 
 /**
  * Mapbox Search Box API client (`/search/searchbox/v1/`). Two-phase:
@@ -38,6 +40,8 @@ object MapboxGeocoder {
         val name: String,
         val context: String,
         val featureType: String,
+        /** Language the suggestion was searched in — [retrieve] must use the same one. */
+        val language: String = "en",
     )
 
     /** Coordinates + canonical name/context for a chosen Suggestion. */
@@ -65,24 +69,26 @@ object MapboxGeocoder {
         // cover the rest. Country/region/postcode/district intentionally omitted —
         // too broad to be navigation targets.
         val types = "&types=poi,address,place,locality,neighborhood,street"
+        val language = languageFor(query)
         val url = URL(
             "https://api.mapbox.com/search/searchbox/v1/suggest" +
-                "?q=$q$prox$types&language=en&limit=8" +
+                "?q=$q$prox$types&language=$language&limit=8" +
                 "&session_token=$sessionToken&access_token=$token"
         )
-        httpGet(url, "suggest q='$query'", ::parseSuggestions) ?: emptyList()
+        httpGet(url, "suggest q='$query'") { parseSuggestions(it, language) } ?: emptyList()
     }
 
     suspend fun retrieve(
         mapboxId: String,
         sessionToken: String,
+        language: String = "en",
     ): RetrievedFeature? = withContext(Dispatchers.IO) {
         val token = BuildConfig.MAPBOX_PUBLIC_TOKEN
         if (token.isBlank()) return@withContext null
         val id = URLEncoder.encode(mapboxId, "UTF-8")
         val url = URL(
             "https://api.mapbox.com/search/searchbox/v1/retrieve/$id" +
-                "?session_token=$sessionToken&access_token=$token"
+                "?language=$language&session_token=$sessionToken&access_token=$token"
         )
         httpGet(url, "retrieve id='$mapboxId'", ::parseRetrieve)
     }
@@ -107,7 +113,30 @@ object MapboxGeocoder {
         }
     }
 
-    private fun parseSuggestions(body: String): List<Suggestion> {
+    /**
+     * Search language for [query]. The language decides which POIs match at all — an
+     * English search for "東京駅" returns only street names, never the station — so
+     * a query typed in Japanese script always searches in Japanese; anything else follows
+     * the phone's language.
+     */
+    internal fun languageFor(query: String): String {
+        val japanese = query.any { c ->
+            when (Character.UnicodeBlock.of(c)) {
+                Character.UnicodeBlock.HIRAGANA,
+                Character.UnicodeBlock.KATAKANA,
+                Character.UnicodeBlock.KATAKANA_PHONETIC_EXTENSIONS,
+                Character.UnicodeBlock.HALFWIDTH_AND_FULLWIDTH_FORMS,
+                Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS,
+                Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_A,
+                Character.UnicodeBlock.CJK_SYMBOLS_AND_PUNCTUATION -> true
+                else -> false
+            }
+        }
+        if (japanese) return "ja"
+        return Locale.getDefault().language.ifBlank { "en" }
+    }
+
+    private fun parseSuggestions(body: String, language: String): List<Suggestion> {
         val root = runCatching { JSONObject(body) }.getOrNull() ?: return emptyList()
         val arr = root.optJSONArray("suggestions") ?: return emptyList()
         val out = ArrayList<Suggestion>(arr.length())
@@ -124,6 +153,7 @@ object MapboxGeocoder {
                 name = name,
                 context = ctx,
                 featureType = featureType,
+                language = language,
             )
         }
         return out

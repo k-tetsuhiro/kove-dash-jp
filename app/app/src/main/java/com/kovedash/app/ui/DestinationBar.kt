@@ -1,5 +1,7 @@
+// Modified by k-tetsuhiro for kove-dash-jp (2026): route preview sheet, km units.
 package com.kovedash.app.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -7,6 +9,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -43,18 +46,27 @@ import com.mapbox.geojson.Point
 import com.kovedash.app.AppHost
 import com.kovedash.app.nav.Destination
 import com.kovedash.app.nav.Navigator
+import com.kovedash.app.nav.PreviewStatus
+import com.kovedash.app.nav.RoutePreview
 import com.kovedash.app.nav.RouteStatus
+import com.kovedash.app.net.MapboxDirections
 import com.kovedash.app.net.MapboxGeocoder
+import com.kovedash.app.ui.dash.NavMap
+import com.kovedash.app.ui.dash.formatPreviewDuration
 import com.kovedash.app.ui.theme.KoveColors
 import com.kovedash.app.ui.theme.KoveFonts
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.rememberCoroutineScope
+import java.time.LocalTime
+import java.time.format.DateTimeFormatter
 import java.util.UUID
 import kotlin.math.roundToInt
 
 /**
- * Compact destination strip. Two visual states:
+ * Compact destination strip. Three visual states:
+ *   - Route preview open (a destination was just picked): [RoutePreviewSheet] — compare
+ *     the route candidates, toggle avoid options, then START.
  *   - No destination set: a tap-target reading "Where to?" — tapping fires
  *     [onActivateSearch] so the parent can present [FullscreenSearch]. We DON'T host an
  *     inline BasicTextField here because in landscape the IME eats >50% of the screen,
@@ -72,8 +84,12 @@ fun DestinationBar(
     val destination by Navigator.destination.collectAsState()
     val activeRoute by Navigator.activeRoute.collectAsState()
     val status by Navigator.routeStatus.collectAsState()
+    val preview by Navigator.preview.collectAsState()
+    val options by Navigator.routeOptions.collectAsState()
 
-    if (destination != null) {
+    if (preview != null) {
+        RoutePreviewSheet(modifier = modifier, preview = preview!!, options = options)
+    } else if (destination != null) {
         ActiveDestinationChip(
             modifier = modifier,
             name = destination!!.name,
@@ -159,10 +175,10 @@ fun FullscreenSearch(
         retrieving = true
         focusManager.clearFocus()
         scope.launch {
-            val r = MapboxGeocoder.retrieve(sug.mapboxId, sessionToken)
+            val r = MapboxGeocoder.retrieve(sug.mapboxId, sessionToken, sug.language)
             retrieving = false
             if (r != null) {
-                Navigator.setDestination(
+                Navigator.previewDestination(
                     Destination(
                         name = r.name,
                         context = r.context,
@@ -434,11 +450,235 @@ private fun subtitleColor(status: RouteStatus): Color = when (status) {
 
 private fun formatEta(distanceMeters: Double?, durationSeconds: Double?): String? {
     if (distanceMeters == null || durationSeconds == null) return null
-    val miles = distanceMeters / 1609.344
     val minutes = (durationSeconds / 60.0).roundToInt()
-    val distStr = if (miles >= 10) "${miles.roundToInt()} MI" else "%.1f MI".format(miles)
-    return "$distStr · $minutes MIN"
+    return "${formatKm(distanceMeters)} · $minutes MIN"
 }
 
 // Quantize lat/lon to a ~10m grid so trivial GPS jitter doesn't re-fire the geocoder.
 private fun Double.roundToCellKey(): Long = (this * 10_000.0).toLong()
+
+/**
+ * Full-screen route preview: the map fills everything above the route picker. Back
+ * cancels the preview (any route already being navigated carries on).
+ */
+@Composable
+fun RoutePreviewScreen(modifier: Modifier = Modifier) {
+    BackHandler { Navigator.cancelPreview() }
+    Column(modifier = modifier.background(KoveColors.Void)) {
+        NavMap(modifier = Modifier.fillMaxWidth().weight(1f), keepAlive = false, autoFollow = false)
+        DestinationBar(modifier = Modifier.fillMaxWidth(), onActivateSearch = {})
+    }
+}
+
+/**
+ * Google Maps-style route picker: destination header, avoid toggles, one card per
+ * candidate route (tap to select — the map highlights it too), and START.
+ */
+@Composable
+private fun RoutePreviewSheet(
+    modifier: Modifier,
+    preview: RoutePreview,
+    options: MapboxDirections.Options,
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(KoveColors.Void2)
+            .border(1.dp, KoveColors.Sky)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = preview.destination.name,
+                    color = KoveColors.Paper,
+                    fontFamily = KoveFonts.VT323,
+                    fontSize = 20.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (preview.destination.context.isNotBlank()) {
+                    Text(
+                        text = preview.destination.context,
+                        color = KoveColors.Sky.copy(alpha = 0.7f),
+                        fontFamily = KoveFonts.VT323,
+                        fontSize = 14.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            ClearButton(onClick = { Navigator.cancelPreview() })
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            AvoidChip("AVOID HWY", options.avoidMotorways) {
+                Navigator.setRouteOptions(options.copy(avoidMotorways = !options.avoidMotorways))
+            }
+            AvoidChip("AVOID TOLLS", options.avoidTolls) {
+                Navigator.setRouteOptions(options.copy(avoidTolls = !options.avoidTolls))
+            }
+            AvoidChip("AVOID FERRY", options.avoidFerries) {
+                Navigator.setRouteOptions(options.copy(avoidFerries = !options.avoidFerries))
+            }
+        }
+
+        when (preview.status) {
+            PreviewStatus.WaitingForGps -> PreviewMessage("WAITING ON GPS…", KoveColors.Yellow)
+            PreviewStatus.Fetching -> PreviewMessage("FINDING ROUTES…", KoveColors.Yellow)
+            PreviewStatus.Error -> PreviewMessage(
+                "NO ROUTE FOUND · TAP TO RETRY", KoveColors.Magenta,
+                onClick = { Navigator.retryPreview() },
+            )
+            PreviewStatus.Ready -> {
+                val fastest = preview.routes.minOf { it.durationSeconds }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    preview.routes.forEachIndexed { i, r ->
+                        RouteCard(
+                            modifier = Modifier.weight(1f),
+                            route = r,
+                            selected = i == preview.selectedIndex,
+                            extraSeconds = r.durationSeconds - fastest,
+                            onClick = { Navigator.selectPreviewRoute(i) },
+                        )
+                    }
+                }
+            }
+        }
+
+        val canStart = preview.status == PreviewStatus.Ready
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(44.dp)
+                .background(if (canStart) KoveColors.SkyDeep else KoveColors.PurpleDim)
+                .border(1.dp, if (canStart) KoveColors.Sky else KoveColors.Hairline)
+                .clickable(enabled = canStart) { Navigator.startPreview() },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "▶ START",
+                color = if (canStart) KoveColors.HotWhite else KoveColors.Paper.copy(alpha = 0.4f),
+                fontFamily = KoveFonts.PressStart2P,
+                fontSize = 13.sp,
+                letterSpacing = 0.1.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun AvoidChip(label: String, on: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .background(if (on) KoveColors.Yellow else KoveColors.Void)
+            .border(1.dp, if (on) KoveColors.Yellow else KoveColors.Hairline)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = (if (on) "✓ " else "") + label,
+            color = if (on) KoveColors.Ink else KoveColors.Paper.copy(alpha = 0.75f),
+            fontFamily = KoveFonts.VT323,
+            fontSize = 15.sp,
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun PreviewMessage(text: String, color: Color, onClick: (() -> Unit)? = null) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .let { if (onClick != null) it.clickable(onClick = onClick) else it }
+            .padding(vertical = 18.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            color = color,
+            fontFamily = KoveFonts.PressStart2P,
+            fontSize = 10.sp,
+            letterSpacing = 0.1.sp,
+        )
+    }
+}
+
+@Composable
+private fun RouteCard(
+    modifier: Modifier,
+    route: MapboxDirections.Route,
+    selected: Boolean,
+    extraSeconds: Double,
+    onClick: () -> Unit,
+) {
+    val extraMin = (extraSeconds / 60.0).roundToInt()
+    Column(
+        modifier = modifier
+            .background(if (selected) KoveColors.PurpleDeep else KoveColors.Void)
+            .border(if (selected) 2.dp else 1.dp, if (selected) KoveColors.SkyDeep else KoveColors.Hairline)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(1.dp),
+    ) {
+        Text(
+            text = formatPreviewDuration(route.durationSeconds),
+            color = if (selected) KoveColors.Sky else KoveColors.Paper,
+            fontFamily = KoveFonts.VT323,
+            fontSize = 22.sp,
+            maxLines = 1,
+        )
+        Text(
+            text = "${formatKm(route.distanceMeters)} · ARR ${arrivalClock(route.durationSeconds)}",
+            color = KoveColors.Paper.copy(alpha = 0.75f),
+            fontFamily = KoveFonts.VT323,
+            fontSize = 14.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = if (extraMin <= 0) "FASTEST" else "+$extraMin MIN",
+            color = if (extraMin <= 0) KoveColors.Mint else KoveColors.Yellow,
+            fontFamily = KoveFonts.VT323,
+            fontSize = 14.sp,
+            maxLines = 1,
+        )
+        if (route.summary.isNotBlank()) {
+            Text(
+                text = "via ${route.summary}",
+                color = KoveColors.Paper.copy(alpha = 0.6f),
+                fontFamily = KoveFonts.VT323,
+                fontSize = 13.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        val tags = buildList {
+            if (route.usesMotorway) add("HWY")
+            if (route.usesToll) add("TOLL")
+            if (route.usesFerry) add("FERRY")
+        }
+        if (tags.isNotEmpty()) {
+            Text(
+                text = tags.joinToString(" · "),
+                color = KoveColors.MagentaHot,
+                fontFamily = KoveFonts.VT323,
+                fontSize = 13.sp,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+private fun formatKm(meters: Double): String {
+    val km = meters / 1000.0
+    return if (km >= 10) "${km.roundToInt()} KM" else "%.1f KM".format(km)
+}
+
+private val ARRIVAL_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
+
+private fun arrivalClock(durationSeconds: Double): String =
+    LocalTime.now().plusSeconds(durationSeconds.toLong()).format(ARRIVAL_FORMAT)
