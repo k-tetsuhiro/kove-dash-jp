@@ -45,6 +45,7 @@ import com.mapbox.maps.ScreenBox
 import com.mapbox.maps.ScreenCoordinate
 import com.mapbox.maps.Style
 import com.mapbox.maps.extension.style.expressions.generated.Expression
+import com.mapbox.maps.extension.localization.localizeLabels
 import com.mapbox.maps.extension.style.layers.addLayer
 import com.mapbox.maps.extension.style.layers.generated.lineLayer
 import com.mapbox.maps.extension.style.layers.generated.symbolLayer
@@ -216,6 +217,7 @@ fun NavMap(
         val mv = mapView ?: return@LaunchedEffect
         if (!appliedViewOnce) { appliedViewOnce = true; return@LaunchedEffect }
         mv.mapboxMap.loadStyle(dashView.styleUri) { style ->
+            style.localizeLabels(MAP_LABEL_LOCALE)
             applyPuck(mv)
             renderRouteLine(style, if (shownPreview != null) null else activeRoute)
             renderPreviewLines(style, shownPreview)
@@ -256,7 +258,9 @@ fun NavMap(
                     // Load the currently-selected view's style (Navigation Day, Outdoors,
                     // …). Nav Day's bold roads / low label clutter survive H.264 encoding
                     // and read at a glance; Outdoors adds terrain + trails for backcountry.
-                    mv.mapboxMap.loadStyle(dashView.styleUri)
+                    mv.mapboxMap.loadStyle(dashView.styleUri) { style ->
+                        style.localizeLabels(MAP_LABEL_LOCALE)
+                    }
                     applyPuck(mv)
                     if (!keepAlive) mv.enableAlternativeTap()
                     mapView = mv
@@ -427,6 +431,14 @@ private fun FrameKeepAlivePip(tick: Long) {
             .background(if (on) KoveColors.Mint else Color.Transparent),
     )
 }
+
+// Map label language. Mapbox styles default to name_en where a feature has one, which
+// renders Japanese POIs transliterated ("Seven Eleven Nerima Kasugacho 4-chome") while
+// ones without an English name stay Japanese — a mix that reads worse than either. This
+// pins every symbol layer to name_ja (Mapbox Streets v8 carries it), falling back to the
+// local name. Hardcoded rather than Locale.getDefault(): this fork is Japan-specific,
+// same call as the metric-only unit handling.
+private val MAP_LABEL_LOCALE = java.util.Locale.JAPANESE
 
 // Speed threshold below which GPS bearing readings are too noisy to trust. ~5.4 km/h.
 private const val MIN_BEARING_SPEED_MPS = 1.5
