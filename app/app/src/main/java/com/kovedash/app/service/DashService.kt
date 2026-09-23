@@ -357,6 +357,7 @@ class DashService : Service() {
             }
             ACTION_STOP_PROJECTION -> stopProjectionKeepBle()
             ACTION_PROJECT_EASTER_EGG -> scope.launch { runProjectAsset(EASTER_EGG_ASSET) }
+            ACTION_RUN_PROBE -> scope.launch { runProbeSweep() }
             ACTION_STOP -> stopSelf()
             ACTION_QUIT -> coldQuit() // notification "Disconnect": full teardown + kill the process
         }
@@ -694,6 +695,27 @@ class DashService : Service() {
             if (w.stale) " (cached/stale)" else "")
     }
 
+    /**
+     * The probe sweep, fired ONLY from Settings → §02 PROBES on an explicit tap. It is never
+     * run automatically: it floods the transparent BLE link (NAVI act=3, ROAD_NAVI, INSIDENAVI
+     * act=0, …), which blocks native turn-by-turn from reassembling and can reset the dash's
+     * nav widget — the quiet-link recipe this whole service is built around. Safe enough as a
+     * deliberate action because the rider is sitting in Settings, not reading a turn.
+     * Clears the previous findings first so the panel shows this sweep, not a merged history.
+     */
+    private suspend fun runProbeSweep() {
+        if (ble.connectionState.value != DashBleClient.State.CONNECTED) {
+            Log.i(TAG, "probe sweep: BLE not connected — skipping")
+            return
+        }
+        AppHost.updateState { it.copy(telemetry = emptyList(), probeSweepRunning = true) }
+        Log.i(TAG, "probe sweep: starting (manual)")
+        runCatching { probe.runOnce() }
+            .onFailure { Log.w(TAG, "probe sweep failed", it) }
+        AppHost.updateState { it.copy(probeSweepRunning = false) }
+        Log.i(TAG, "probe sweep: done")
+    }
+
     /** Push the phone's real GPS elevation to the dash's native altitude field (msg_type=9).
      *  Proven 2026-07-30: the dash's elevation readout (trip/odo section) takes this value. */
     private suspend fun sendAltitudeOnConnect() {
@@ -980,7 +1002,8 @@ class DashService : Service() {
                 AppHost.updateState { st -> st.copy(telemetry = st.telemetry + f) }
             }
         }
-        // probe.runOnce()  // deliberately not called — see note above
+        // probe.runOnce()  // deliberately not called on connect — see note above and
+        // runProbeSweep(), which is the only thing that fires it (on the rider's request).
         Log.i(TAG, "runConnect: telemetry probe sweep intentionally not run (quiet-link recipe)")
 
         // BLE-PRIMARY DEFAULT: the whole point of connect is to bring Wi-Fi/17818 up ONCE so the
@@ -1526,6 +1549,9 @@ class DashService : Service() {
         // cleanly (releases the wake lock, back to READY, no black screen). Generous so the
         // rider has time to do the UP long-press on the dash that makes it dial.
         const val EASTER_EGG_DIAL_TIMEOUT_MS = 15_000L
+        // Manual, user-initiated telemetry probe sweep (Settings → §02 PROBES). Never fired
+        // automatically — see runProbeSweep for why.
+        const val ACTION_RUN_PROBE = "kovedash.RUN_PROBE"
         const val ACTION_STOP = "kovedash.STOP"
         const val ACTION_QUIT = "kovedash.QUIT" // notification Disconnect: full teardown + kill process
         const val EXTRA_RESULT_CODE = "kovedash.resultCode"
@@ -1585,6 +1611,11 @@ class DashService : Service() {
          *  already-connected link. The control channel is up from [startConnect]. */
         fun startArmProjection(ctx: Context) {
             ctx.startService(Intent(ctx, DashService::class.java).setAction(ACTION_ARM_PROJECTION))
+        }
+
+        /** Run the telemetry probe sweep once, on the rider's explicit request. */
+        fun startProbeSweep(ctx: Context) {
+            ctx.startService(Intent(ctx, DashService::class.java).setAction(ACTION_RUN_PROBE))
         }
 
         /** BLE-primary: drop Wi-Fi to a BLE-only steady state (rendering already activated). */

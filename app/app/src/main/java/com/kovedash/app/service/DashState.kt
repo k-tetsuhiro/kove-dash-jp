@@ -27,6 +27,9 @@ data class DashState(
     val mac: String? = null,
     val deviceType: String? = null,
     val telemetry: List<TelemetryFinding> = emptyList(),
+    // True while a manual probe sweep (Settings → §02) is in flight, so the UI can
+    // disable the button and show progress. Never set by the connect path.
+    val probeSweepRunning: Boolean = false,
     val projectionWaitingForUp: Boolean = false,
     val liveMode: Boolean = false,
     // BLE-primary steady state: Wi-Fi has been intentionally dropped after it activated the

@@ -183,10 +183,10 @@ private fun App() {
             var searching by rememberSaveable { mutableStateOf(false) }
             if (state.showSettings) {
                 SettingsScreen(
-                    currentPassword = state.savedDashPassword,
-                    currentSsidPrefix = state.savedSsidPrefix,
+                    state = state,
                     onSave = AppHost::saveSettings,
                     onBack = AppHost::closeSettings,
+                    onRunProbeSweep = AppHost::runProbeSweep,
                 )
             } else {
                 ConnectScreen(

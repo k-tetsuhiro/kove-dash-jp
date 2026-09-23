@@ -28,10 +28,7 @@ import android.content.res.Configuration
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -60,8 +57,6 @@ import com.kovedash.app.ui.dash.NavMap
 import com.kovedash.app.ui.theme.KoveColors
 import com.kovedash.app.ui.theme.KoveFonts
 
-private enum class DashTab { Map, Telemetry }
-
 @Composable
 fun ConnectScreen(
     state: DashState,
@@ -74,7 +69,6 @@ fun ConnectScreen(
     onEasterEgg: () -> Unit = {},
     onGrantNotifAccess: () -> Unit = {},
 ) {
-    var selectedTab by rememberSaveable { mutableStateOf(DashTab.Map) }
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
 
     Column(
@@ -85,12 +79,10 @@ fun ConnectScreen(
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        // In landscape the bike is mounted and screen real estate is precious — drop
-        // the top SponsorBand + Header (KoveDash brand line, status pill, SET cog)
-        // so the MAP / TELEMETRY tab row is the topmost element and the map gets
-        // those ~120dp back. Settings are still reachable by rotating to portrait;
-        // the right rail's PhaseStrip carries the handshake status info that lived
-        // in the header pill.
+        // In landscape the bike is mounted and screen real estate is precious — drop the
+        // top SponsorBand + Header (KoveDash brand line, status pill, cog) so the map is the
+        // topmost element and gets those ~120dp back. The right rail carries what the header
+        // held: the PhaseStrip has the handshake status, and it repeats the settings cog.
         if (!isLandscape) {
             SponsorBand(modifier = Modifier.fillMaxWidth())
             Header(state = state, onOpenSettings = onOpenSettings, onEasterEgg = onEasterEgg)
@@ -118,23 +110,14 @@ fun ConnectScreen(
                 modifier = Modifier.fillMaxWidth().weight(1f),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Column(
-                    modifier = Modifier.weight(1f).fillMaxHeight(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .background(KoveColors.Void2)
+                        .border(1.dp, KoveColors.Hairline2),
                 ) {
-                    TabRow(selected = selectedTab, onSelect = { selectedTab = it })
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                            .background(KoveColors.Void2)
-                            .border(1.dp, KoveColors.Hairline2),
-                    ) {
-                        when (selectedTab) {
-                            DashTab.Map -> MapTab(onActivateSearch = onActivateSearch)
-                            DashTab.Telemetry -> TelemetryTab(state)
-                        }
-                    }
+                    MapTab(onActivateSearch = onActivateSearch)
                 }
                 // Right rail: PhaseStrip + ActionBar. Scrolls in case the PhaseStrip
                 // expansion (during BLE_HANDSHAKE the pacenote rows extend) plus three
@@ -146,6 +129,10 @@ fun ConnectScreen(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
+                    // The header (and its cog) is dropped in landscape for screen space, so
+                    // the rail carries settings access — otherwise it's unreachable on a
+                    // bike-mounted phone without rotating.
+                    SettingsCog(onClick = onOpenSettings, modifier = Modifier.fillMaxWidth())
                     PhaseStrip(state)
                     ActionBar(
                         state = state,
@@ -157,7 +144,6 @@ fun ConnectScreen(
                 }
             }
         } else {
-            TabRow(selected = selectedTab, onSelect = { selectedTab = it })
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -165,10 +151,7 @@ fun ConnectScreen(
                     .background(KoveColors.Void2)
                     .border(1.dp, KoveColors.Hairline2),
             ) {
-                when (selectedTab) {
-                    DashTab.Map -> MapTab(onActivateSearch = onActivateSearch)
-                    DashTab.Telemetry -> TelemetryTab(state)
-                }
+                MapTab(onActivateSearch = onActivateSearch)
             }
             PhaseStrip(state)
             ActionBar(
@@ -240,51 +223,6 @@ private fun Header(state: DashState, onOpenSettings: () -> Unit, onEasterEgg: ()
 }
 
 @Composable
-private fun TabRow(selected: DashTab, onSelect: (DashTab) -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(KoveColors.Void2)
-            .border(1.dp, KoveColors.Hairline2),
-    ) {
-        DashTab.entries.forEach { key ->
-            TabButton(
-                label = key.name.uppercase(),
-                selected = selected == key,
-                onClick = { onSelect(key) },
-                modifier = Modifier.weight(1f),
-            )
-        }
-    }
-}
-
-@Composable
-private fun TabButton(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val bg = if (selected) KoveColors.Yellow else Color.Transparent
-    val fg = if (selected) KoveColors.Ink else KoveColors.Sky
-    Box(
-        modifier = modifier
-            .background(bg)
-            .clickable(onClick = onClick)
-            .padding(vertical = 12.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = label,
-            color = fg,
-            fontFamily = KoveFonts.PressStart2P,
-            fontSize = 10.sp,
-            letterSpacing = 0.15.sp,
-        )
-    }
-}
-
-@Composable
 private fun MapTab(onActivateSearch: () -> Unit) {
     // The destination tap-target asks the App level to flip on FullscreenSearch as a
     // top-level overlay — that way the search covers the header + action rail + everything,
@@ -297,38 +235,6 @@ private fun MapTab(onActivateSearch: () -> Unit) {
             modifier = Modifier.fillMaxWidth(),
             onActivateSearch = onActivateSearch,
         )
-    }
-}
-
-@Composable
-private fun TelemetryTab(state: DashState) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        SectionHeader(number = "§00", title = "Identity")
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(KoveColors.Void)
-                .border(1.dp, KoveColors.Hairline2)
-                .padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            IdleKv(label = "Phase", value = subtagFor(state), color = phaseDotColor(state.phase))
-            IdleKv(label = "Gateway", value = state.dashGatewayIp ?: "—", color = if (state.dashGatewayIp != null) KoveColors.Mint else KoveColors.Paper.copy(alpha = 0.5f))
-            IdleKv(label = "Firmware", value = state.firmware ?: "—", color = KoveColors.Paper)
-            IdleKv(label = "MAC", value = state.mac ?: "—", color = KoveColors.Paper)
-            IdleKv(label = "Device", value = state.deviceType ?: "—", color = KoveColors.Yellow)
-            IdleKv(label = "Battery", value = state.batteryLevel?.let { "$it%" } ?: "—", color = batteryColor(state.batteryLevel))
-            IdleKv(label = "SSID Prefix", value = state.savedSsidPrefix, color = KoveColors.Sky)
-        }
-
-        SectionHeader(number = "§01", title = "Probes")
-        TelemetryPanel(state = state, modifier = Modifier.fillMaxWidth())
     }
 }
 
@@ -539,16 +445,25 @@ private fun stageFor(phase: ConnectionPhase): Int = when (phase) {
 }
 
 @Composable
-private fun SettingsCog(onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
+private fun SettingsCog(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
             .background(KoveColors.Void2)
             .border(2.dp, KoveColors.Yellow)
-            .padding(horizontal = 8.dp, vertical = 6.dp)
-            .clickable(onClick = onClick),
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
+        // Gear glyph in the body font — PressStart2P has no ⚙, so it would tofu there.
         Text(
-            text = "SET",
+            text = "\u2699",
+            color = KoveColors.Yellow,
+            fontFamily = KoveFonts.VT323,
+            fontSize = 20.sp,
+        )
+        Text(
+            text = "SETTINGS",
             color = KoveColors.Yellow,
             fontFamily = KoveFonts.PressStart2P,
             fontSize = 8.sp,

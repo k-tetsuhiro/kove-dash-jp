@@ -96,6 +96,15 @@ object AppHost {
         }
     }
 
+    /**
+      * Run the telemetry probe sweep once (Settings → §02 PROBES). Deliberately manual: the
+      * sweep is noisy on the BLE link, so it is never fired on connect. No-op unless the dash
+      * is connected — DashService checks and logs.
+      */
+    fun runProbeSweep() {
+        appContext?.let(DashService::startProbeSweep)
+    }
+
     fun savePasswordAndConnect(password: String) {
         settings?.dashPassword = password
         _state.update { it.copy(needsPassword = false, errorMessage = null) }
