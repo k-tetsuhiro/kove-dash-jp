@@ -11,6 +11,7 @@ import kotlin.math.roundToInt
 
 /**
  * Fetches current weather from Open-Meteo (free, no API key) to push to the dash.
+ * Metric throughout: Celsius + km/h (the dash is driven metric-only — see DashMessages.setUnit).
  *
  * Resilient to thin/absent connectivity: [fetchCurrent] retries a few times, and if the
  * network is down (no cell service, satellite-only, or on the dash's no-internet AP) it
@@ -25,8 +26,8 @@ object WeatherSource {
     private const val MAX_STALE_MS = 6 * 60 * 60 * 1000L // 6h — beyond this the cache is untrustworthy
 
     data class Weather(
-        val tempF: Int,
-        val windMph: Int,
+        val tempC: Int,
+        val windKmh: Int,
         val dashCode: Int,
         /** True when this is a served-from-cache reading (a live fetch just failed). */
         val stale: Boolean = false,
@@ -65,7 +66,7 @@ object WeatherSource {
     private fun fetchOnce(lat: Double, lon: Double): Weather? {
         val url = "https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon" +
             "&current=temperature_2m,weather_code,wind_speed_10m" +
-            "&temperature_unit=fahrenheit&wind_speed_unit=mph"
+            "&temperature_unit=celsius&wind_speed_unit=kmh"
         return runCatching {
             val conn = (URL(url).openConnection() as HttpURLConnection).apply {
                 // Generous timeouts: high-latency links (e.g. satellite) can still land a
@@ -81,8 +82,8 @@ object WeatherSource {
             }
             val cur = JSONObject(body).getJSONObject("current")
             Weather(
-                tempF = cur.getDouble("temperature_2m").roundToInt(),
-                windMph = cur.getDouble("wind_speed_10m").roundToInt(),
+                tempC = cur.getDouble("temperature_2m").roundToInt(),
+                windKmh = cur.getDouble("wind_speed_10m").roundToInt(),
                 dashCode = wmoToDash(cur.optInt("weather_code", 1)),
             )
         }.onFailure { Log.w(TAG, "weather fetch attempt failed", it) }.getOrNull()

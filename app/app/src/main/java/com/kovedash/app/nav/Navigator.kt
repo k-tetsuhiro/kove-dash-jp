@@ -95,7 +95,7 @@ object Navigator {
     //   cumMeters[i]   = cumulative distance from coords[0] to coords[i]
     //   stepAlong[k]   = along-route distance of step k's maneuver location
     // Proximity-only advance wedges permanently if the rider passes a maneuver outside
-    // its snap radius (routine at highway speed: 36 m between fixes at 80 mph vs a 30 m
+    // its snap radius (routine at highway speed: 36 m between fixes at 130 km/h vs a 30 m
     // radius). Projecting the rider onto the polyline and advancing past every step
     // that's behind them can't wedge.
     private var cumMeters: DoubleArray = DoubleArray(0)

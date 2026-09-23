@@ -22,7 +22,6 @@ import androidx.core.app.NotificationCompat
 import com.kovedash.app.AppHost
 import com.kovedash.app.net.DashBleClient
 import com.kovedash.app.net.DashTcpServer
-import java.util.Locale
 import com.kovedash.app.net.DashWifi
 import com.kovedash.app.net.WeatherSource
 import com.kovedash.app.project.LiveProjectionSession
@@ -600,11 +599,6 @@ class DashService : Service() {
         } ?: false
     }
 
-    /** True if the phone's region uses imperial units (US, Liberia, Myanmar) — drives the dash
-     *  unit push so nav distance / altitude render in miles-feet vs km-meters. */
-    private fun usesImperialUnits(): Boolean =
-        Locale.getDefault().country.uppercase(Locale.US) in setOf("US", "LR", "MM")
-
     /**
      * Matches the OEM ThinkerRide post-firmware-version burst order documented in
      * phase2/_re_report_thinkerride.md §4 step 15. setTime is the SECOND message after
@@ -628,11 +622,10 @@ class DashService : Service() {
         timeSyncEchoesLeft = TIME_SYNC_ECHO_MAX
         delay(500)
         // Tell the dash which unit system to render app-pushed distances in (nav finish-flag,
-        // altitude). We send meters/km and the dash converts; without this it defaults to metric
-        // even when the dash's own odo menu is imperial. Derived from the phone's locale.
-        val imperial = usesImperialUnits()
-        ble.sendJson(DashMessages.setUnit(imperial))
-        Log.i(TAG, "handshake: msg_id 25 setUnit ${if (imperial) "imperial" else "metric"} pushed")
+        // altitude). We push SI throughout and the dash labels it: metric, always — this build
+        // is metric-only (km / ℃ / km/h), independent of the phone's locale.
+        ble.sendJson(DashMessages.setUnit())
+        Log.i(TAG, "handshake: msg_id 25 setUnit metric pushed")
         delay(500)
         ble.sendJson(DashMessages.sendLinkInfo())
         delay(500)
@@ -690,9 +683,14 @@ class DashService : Service() {
         val loc = lastKnownLocation() ?: run { Log.i(TAG, "weather: no location — skipping"); return }
         val w = WeatherSource.fetchCurrent(loc.first, loc.second) ?: return
         runCatching {
-            ble.sendJson(DashMessages.setWeather(w.dashCode, "${w.tempF}F", "${w.windMph}mph"))
+            // Temperature is sent as the BARE NUMBER: the dash appends its own unit label
+            // from the setUnit setting (metric -> "℃"). Proven on-device — we used to send
+            // "74F" and the dash rendered "74 ℃", i.e. it parses the digits and discards the
+            // suffix, so a Fahrenheit value was being shown under a Celsius label. wind_power
+            // keeps its unit in the string (no evidence the dash labels that field itself).
+            ble.sendJson(DashMessages.setWeather(w.dashCode, "${w.tempC}", "${w.windKmh}km/h"))
         }.onFailure { Log.w(TAG, "weather send failed", it); return }
-        Log.i(TAG, "weather sent: ${w.tempF}F wind=${w.windMph}mph code=${w.dashCode}" +
+        Log.i(TAG, "weather sent: ${w.tempC}C wind=${w.windKmh}km/h code=${w.dashCode}" +
             if (w.stale) " (cached/stale)" else "")
     }
 
@@ -832,17 +830,14 @@ class DashService : Service() {
         // and blocking reassembly. Nav also lands at a low BLE seq (~10-13) because the
         // handshake is now lean. Dedup upstream (NavForwarder) keeps it one-shot-per-turn.
         //
-        // Distances are SI METERS; the dash renders the legacy frame's raw meters as km. Unlike
-        // altitude (which the dash DOES convert to feet from the imperial setting), the nav
-        // distance field has no unit control in firmware — it's metric-only (confirmed: the dash
-        // uses the legacy msg_id=1 frame, which carries no unittype; the OEM shows km here too).
-        // So for imperial locales we scale the DESTINATION distance to miles ourselves: the dash
-        // then shows "N.N km" where the number is really MILES (the label lies; the number is
-        // right). Turn distance (cur) stays metric for now — small values don't scale cleanly.
+        // Distances are SI METERS; the dash renders the legacy frame's raw meters as km. The
+        // nav distance field has no unit control in firmware — it's metric-only (confirmed: the
+        // dash uses the legacy msg_id=1 frame, which carries no unittype; the OEM shows km here
+        // too). That suits us: this build is metric throughout, so the meters go out unscaled
+        // and the dash's "km" label is honest.
         // -1 sentinels (Maps hadn't populated yet) clamp to 0 so we never send garbage.
         val cur = curMeters.coerceAtLeast(0)
-        val pathReal = pathMeters.coerceAtLeast(0)          // true meters to destination
-        val path = if (usesImperialUnits()) (pathReal * METERS_TO_MILES + 0.5).toInt() else pathReal
+        val path = pathMeters.coerceAtLeast(0)              // true meters to destination
         val remain = remainSec.coerceAtLeast(0)             // trip seconds remaining
         val rate = retainRate.coerceIn(0, 100)              // % of route travelled (0 if unknown)
         // Modern remain_time is a wall-clock arrival epoch (dash shows ETA); legacy remain_time
@@ -1039,7 +1034,7 @@ class DashService : Service() {
                     AppHost.updateState {
                     // Type 1 sub 5 = firmware version; type 1 sub 11 = MAC; type 1 sub 13 = device type.
                     // Treating payload bytes as UTF-8 is fine for these — the OEM does the same.
-                    val s = String(msg.payload, Charsets.UTF_8).trimEnd(' ').ifBlank { null }
+                    val s = String(msg.payload, Charsets.UTF_8).trimEnd('\u0000').ifBlank { null }
                     when (msg.sub) {
                         5 -> it.copy(phase = ConnectionPhase.DEVICE_DIALED, firmware = s)
                         11 -> it.copy(phase = ConnectionPhase.DEVICE_DIALED, mac = s)
@@ -1545,10 +1540,6 @@ class DashService : Service() {
         // Number of dash clock solicits to echo per connect before going silent. >1 for
         // drop-resilience (an early setTime frame may be lost); the clock is set after one.
         private const val TIME_SYNC_ECHO_MAX = 3
-        // Scale real meters so the dash's km readout shows the MILES number instead: the dash
-        // displays sentValue/1000 as "km", and miles = meters/1609.344, so sentValue =
-        // meters * (1000/1609.344) = meters * 0.621371 makes "N.N km" read as N.N miles.
-        private const val METERS_TO_MILES = 0.621371
         // Wedge detection (reconnect-on-wedge). Relink when dash resend requests have been
         // arriving continuously for this long (a quiet gap resets the streak). Tuned so a
         // transient loss the dash self-recovers stays under the bar; adjust against ride logs.

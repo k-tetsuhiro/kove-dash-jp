@@ -156,6 +156,9 @@ object NavNotificationParser {
         val m = DISTANCE_RE.find(title) ?: return -1
         val value = m.groupValues[1].replace(",", "").toDoubleOrNull() ?: return -1
         val meters = when (m.groupValues[2].lowercase(Locale.US)) {
+            // Kept even though this build displays metric: the unit here is whatever
+            // Google Maps put in ITS notification, which follows the Maps/phone setting.
+            // Parsing it to SI meters is what makes the rest of the pipeline metric.
             "mi" -> value * 1609.344
             "km" -> value * 1000.0
             "yd" -> value * 0.9144

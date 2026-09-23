@@ -286,7 +286,7 @@ fun NavMap(
                     compact = true,
                 )
                 // Big upcoming-turn arrow where the speed HUD used to be (the dash's own
-                // speedo already reads mph). ETA/distance-remaining gets its own corner so
+                // speedo already reads km/h). ETA/distance-remaining gets its own corner so
                 // it persists when the turn banner is hidden between maneuvers.
                 TurnArrow(modifier = Modifier.align(Alignment.BottomStart))
                 DashTripHud(modifier = Modifier.align(Alignment.BottomEnd))
@@ -428,11 +428,11 @@ private fun FrameKeepAlivePip(tick: Long) {
     )
 }
 
-// Speed threshold below which GPS bearing readings are too noisy to trust. ~3.4 mph.
+// Speed threshold below which GPS bearing readings are too noisy to trust. ~5.4 km/h.
 private const val MIN_BEARING_SPEED_MPS = 1.5
 
 // Auto-tilt speed band: below TILT_MIN the camera is flat (top-down); at/above TILT_FULL
-// it's at the view's full pitch; linear between. ~4.5 mph → ~25 mph.
+// it's at the view's full pitch; linear between. ~7 km/h → ~40 km/h.
 private const val TILT_MIN_MPS = 2.0
 private const val TILT_FULL_MPS = 11.0
 

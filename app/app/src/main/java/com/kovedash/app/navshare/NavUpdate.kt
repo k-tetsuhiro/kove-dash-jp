@@ -6,8 +6,8 @@ package com.kovedash.app.navshare
  * fields (distance to destination + time remaining) come from the subText
  * ("13 min · 4.6 mi · 11:55 ETA").
  *
- * All distances are METERS and times are SECONDS (SI) — the dash converts to the rider's unit
- * (imperial → feet/miles) on display, same as the altitude field. -1 means "not parseable".
+ * All distances are METERS and times are SECONDS (SI) — the dash labels them per the pushed
+ * unit setting, which this build fixes to metric (km/m). -1 means "not parseable".
  *
  * @param distanceToTurnMeters meters to the next maneuver, or -1 if not yet parseable
  *        (Google Maps flickers empty / "0 m" for a moment at nav start).

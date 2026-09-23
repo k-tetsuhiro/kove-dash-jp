@@ -191,12 +191,12 @@ object DashMessages {
      * msg_id 25 msg_type 14 — set the dash's display unit system for app-pushed values.
      * ThinkerRide JsonManager.sendSetUnit:2033 (`{msg_id:25,msg_type:14,msg_source:2,unit:N}`);
      * value mapping from DeviceSettingActivity's picker: **1 = metric, 2 = imperial** (British).
-     * We push distances in meters/km (cur/path_unittype 0/1, same as the OEM) and rely on this
-     * setting for the dash to convert to the rider's unit (miles/feet). Without it the nav widget
-     * defaults to metric even when the dash's own odo menu is imperial.
+     * We push distances in meters/km (cur/path_unittype 0/1, same as the OEM) and this tells the
+     * dash how to label them. This build is metric-only — km / ℃ / km/h — so we always send
+     * `unit:1`, which also makes the dash's own "℃" weather label match the Celsius we push.
      */
-    fun setUnit(imperial: Boolean): String =
-        """{"msg_id":25,"msg_type":14,"msg_source":2,"unit":${if (imperial) 2 else 1}}"""
+    fun setUnit(): String =
+        """{"msg_id":25,"msg_type":14,"msg_source":2,"unit":1}"""
 
     /**
      * msg_id 27 func=MUSIC act=ret_msg — now-playing metadata pushed to the dash.

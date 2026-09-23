@@ -1,4 +1,4 @@
-// Modified by k-tetsuhiro for kove-dash-jp (2026): distances in km instead of miles.
+// Modified by k-tetsuhiro for kove-dash-jp (2026): metric throughout (km / ℃ / km/h).
 package com.kovedash.app.ui.dash
 
 import androidx.compose.foundation.background
@@ -58,16 +58,16 @@ fun ManeuverBanner(modifier: Modifier = Modifier, compact: Boolean = false) {
         return
     }
     val p = progress ?: return
-    // The dash banner is a turn callout — only surface it within HALF_MILE of the
+    // The dash banner is a turn callout — only surface it within TURN_CALLOUT_M of the
     // maneuver so it "pops up" as you approach instead of sitting there the whole ride.
     // (The phone-side full banner always shows.)
-    if (compact && p.distanceToManeuverMeters > HALF_MILE_M) return
+    if (compact && p.distanceToManeuverMeters > TURN_CALLOUT_M) return
     if (compact) CompactBanner(modifier, p) else FullBanner(modifier, p)
 }
 
 /**
  * Big upcoming-turn direction arrow for the dash — replaces the (redundant, the dash's
- * own speedo already reads mph) speed HUD. Shows the maneuver direction at a glance
+ * own speedo already reads km/h) speed HUD. Shows the maneuver direction at a glance
  * whenever a route is active, with the distance under it. Larger and always-on, versus
  * the top banner which only pops up near the turn.
  */
@@ -402,8 +402,8 @@ internal fun formatDistance(meters: Double): String {
     return if (km < 10.0) "%.1f KM".format(km) else "${km.roundToInt()} KM"
 }
 
-// The dash turn banner appears within this distance of the maneuver (~half a mile).
-private const val HALF_MILE_M = 804.672
+// The dash turn banner appears within this distance of the maneuver.
+private const val TURN_CALLOUT_M = 800.0
 
 /** Estimated time to arrival: "N MIN" under an hour, else "H:MM". */
 internal fun formatEta(seconds: Double): String {
