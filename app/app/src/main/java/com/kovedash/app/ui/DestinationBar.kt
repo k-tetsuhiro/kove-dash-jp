@@ -1,4 +1,4 @@
-// Modified by k-tetsuhiro for kove-dash-jp (2026): route preview sheet, km units.
+// Modified by k-tetsuhiro for kove-dash-jp (2026): Maps-style search + route picker.
 package com.kovedash.app.ui
 
 import androidx.activity.compose.BackHandler
@@ -9,15 +9,18 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -28,16 +31,21 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -51,96 +59,104 @@ import com.kovedash.app.nav.RoutePreview
 import com.kovedash.app.nav.RouteStatus
 import com.kovedash.app.net.MapboxDirections
 import com.kovedash.app.net.MapboxGeocoder
+import com.kovedash.app.ui.components.AppButton
+import com.kovedash.app.ui.components.BottomSheet
+import com.kovedash.app.ui.components.ButtonTone
+import com.kovedash.app.ui.components.FloatingSearchBar
+import com.kovedash.app.ui.components.Glyph
+import com.kovedash.app.ui.components.MapPill
+import com.kovedash.app.ui.components.ResultIcon
 import com.kovedash.app.ui.dash.NavMap
-import com.kovedash.app.ui.dash.formatPreviewDuration
-import com.kovedash.app.ui.theme.KoveColors
-import com.kovedash.app.ui.theme.KoveFonts
+import com.kovedash.app.ui.theme.AppColors
+import com.kovedash.app.ui.theme.AppFonts
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import androidx.compose.runtime.rememberCoroutineScope
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.UUID
 import kotlin.math.roundToInt
 
 /**
- * Compact destination strip. Three visual states:
- *   - Route preview open (a destination was just picked): [RoutePreviewSheet] — compare
- *     the route candidates, toggle avoid options, then START.
- *   - No destination set: a tap-target reading "Where to?" — tapping fires
- *     [onActivateSearch] so the parent can present [FullscreenSearch]. We DON'T host an
- *     inline BasicTextField here because in landscape the IME eats >50% of the screen,
- *     collapsing the map (`weight=1f`) and burying the suggestions dropdown.
- *   - Destination set: a chip showing the destination + distance/ETA + clear button.
+ * The pill floating at the top of the map — Maps' search field, doing double duty as the
+ * destination display. Two states:
+ *   - nothing set: "どこへ行く？" plus the settings cog on the right.
+ *   - destination set: the destination's name plus a clear button, with a second pill
+ *     underneath carrying route status (fetching / rerouting / distance + ETA).
  *
- * The fullscreen search lives at [FullscreenSearch] and is shown by the Map tab instead
- * of the map when active.
+ * Tapping fires [onActivateSearch] so the parent can present [FullscreenSearch] over
+ * everything. We don't host the text field here: in landscape the IME eats over half the
+ * screen, which would collapse the map behind it.
  */
 @Composable
 fun DestinationBar(
     modifier: Modifier = Modifier,
     onActivateSearch: () -> Unit,
+    onOpenSettings: () -> Unit = {},
+    onEasterEgg: () -> Unit = {},
 ) {
     val destination by Navigator.destination.collectAsState()
     val activeRoute by Navigator.activeRoute.collectAsState()
     val status by Navigator.routeStatus.collectAsState()
-    val preview by Navigator.preview.collectAsState()
-    val options by Navigator.routeOptions.collectAsState()
 
-    if (preview != null) {
-        RoutePreviewSheet(modifier = modifier, preview = preview!!, options = options)
-    } else if (destination != null) {
-        ActiveDestinationChip(
-            modifier = modifier,
-            name = destination!!.name,
-            context = destination!!.context,
-            distanceMeters = activeRoute?.distanceMeters,
-            durationSeconds = activeRoute?.durationSeconds,
-            status = status,
-            onClear = { Navigator.clearDestination() },
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        FloatingSearchBar(
+            placeholder = "どこへ行く？",
+            value = destination?.name,
+            onClick = onActivateSearch,
+            trailing = {
+                if (destination != null) {
+                    CircleIconButton(glyph = "✕", onClick = { Navigator.clearDestination() })
+                } else {
+                    // Long-press the cog for the "this is fine" easter egg the retro build
+                    // hid on the wordmark, which no longer exists.
+                    CircleIconButton(
+                        glyph = "⚙",
+                        onClick = onOpenSettings,
+                        onLongPress = onEasterEgg,
+                    )
+                }
+            },
         )
-    } else {
-        TapToSearchBar(modifier = modifier, onClick = onActivateSearch)
+        val note = routeNote(status, activeRoute?.distanceMeters, activeRoute?.durationSeconds)
+        if (destination != null && note != null) {
+            MapPill(label = note, accent = routeNoteColor(status), onClick = onActivateSearch)
+        }
     }
 }
 
 @Composable
-private fun TapToSearchBar(modifier: Modifier, onClick: () -> Unit) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = modifier
-            .fillMaxWidth()
-            .background(KoveColors.Void2)
-            .border(1.dp, KoveColors.Yellow)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 10.dp),
+private fun CircleIconButton(
+    glyph: String,
+    onClick: () -> Unit,
+    onLongPress: (() -> Unit)? = null,
+) {
+    Box(
+        modifier = Modifier
+            .size(32.dp)
+            .clip(CircleShape)
+            .background(AppColors.Surface3)
+            .then(
+                if (onLongPress != null) {
+                    Modifier.pointerInput(Unit) {
+                        detectTapGestures(onTap = { onClick() }, onLongPress = { onLongPress() })
+                    }
+                } else {
+                    Modifier.clickable(onClick = onClick)
+                }
+            ),
+        contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = "GO",
-            color = KoveColors.Yellow,
-            fontFamily = KoveFonts.PressStart2P,
-            fontSize = 9.sp,
-            letterSpacing = 0.1.sp,
-        )
-        Box(modifier = Modifier.width(8.dp))
-        Text(
-            text = "Where to?",
-            color = KoveColors.Paper.copy(alpha = 0.55f),
-            fontFamily = KoveFonts.VT323,
-            fontSize = 18.sp,
-        )
+        Glyph(glyph, AppColors.Ink2, 15.sp)
     }
 }
 
 /**
- * Full-screen destination search. Takes over the entire Map tab when active so the
- * keyboard and suggestion list always have enough room, regardless of orientation.
- * Auto-focuses the text field on first composition so the IME opens immediately —
- * no double-tap to start typing.
+ * Full-screen destination search. Opens with the keyboard up, queries Mapbox SearchBox as
+ * you type (debounced), and lists matches as Maps-style rows.
  *
  * Suggestions render in a LazyColumn so a long list scrolls cleanly above the keyboard.
- * [Modifier.imePadding] on the root keeps the suggestion list above the IME without
- * fighting `adjustResize` (the Window resizes; the LazyColumn fills what's left).
+ * [Modifier.imePadding] on the root keeps the list above the IME without fighting
+ * `adjustResize` (the window resizes; the LazyColumn fills what's left).
  */
 @Composable
 fun FullscreenSearch(
@@ -187,40 +203,47 @@ fun FullscreenSearch(
                 )
                 onDone()
             }
-            // On retrieve failure we stay on the search overlay so the user can
-            // try another suggestion. The HTTP error already logged via Log.w.
+            // On retrieve failure we stay on the overlay so the rider can try another
+            // suggestion. The HTTP error already logged via Log.w.
         }
     }
 
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(KoveColors.Void)
+            .background(AppColors.Surface)
+            .statusBarsPadding()
             .imePadding(),
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
-                .background(KoveColors.Void2)
-                .border(1.dp, KoveColors.Yellow)
-                .padding(horizontal = 10.dp, vertical = 10.dp),
+                .height(56.dp)
+                .padding(horizontal = 14.dp),
         ) {
-            Text(
-                text = "GO",
-                color = KoveColors.Yellow,
-                fontFamily = KoveFonts.PressStart2P,
-                fontSize = 9.sp,
-                letterSpacing = 0.1.sp,
-            )
-            Box(modifier = Modifier.width(8.dp))
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .clickable {
+                        focusManager.clearFocus()
+                        onDone()
+                    },
+                contentAlignment = Alignment.Center,
+            ) { Glyph("←", AppColors.Ink, 20.sp) }
+            Box(Modifier.width(8.dp))
             BasicTextField(
                 value = query,
                 onValueChange = { query = it },
                 singleLine = true,
                 modifier = Modifier.weight(1f).focusRequester(focusRequester),
-                textStyle = TextStyle(color = KoveColors.Paper, fontSize = 20.sp, fontFamily = KoveFonts.VT323),
-                cursorBrush = SolidColor(KoveColors.Yellow),
+                textStyle = TextStyle(
+                    color = AppColors.Ink,
+                    fontSize = 16.sp,
+                    fontFamily = AppFonts.Sans,
+                ),
+                cursorBrush = SolidColor(AppColors.Blue),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(
                     onSearch = { suggestions.firstOrNull()?.let(::select) },
@@ -228,49 +251,31 @@ fun FullscreenSearch(
                 decorationBox = { inner ->
                     if (query.isEmpty()) {
                         Text(
-                            text = "Where to?",
-                            color = KoveColors.Paper.copy(alpha = 0.35f),
-                            fontFamily = KoveFonts.VT323,
-                            fontSize = 20.sp,
+                            text = "どこへ行く？",
+                            color = AppColors.Ink3,
+                            fontFamily = AppFonts.Sans,
+                            fontSize = 16.sp,
                         )
                     }
                     inner()
                 },
             )
-            Box(modifier = Modifier.width(10.dp))
-            CancelButton(onClick = {
-                focusManager.clearFocus()
-                onDone()
-            })
+            if (query.isNotEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .clickable { query = "" },
+                    contentAlignment = Alignment.Center,
+                ) { Glyph("✕", AppColors.Ink2, 15.sp) }
+            }
         }
+        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(AppColors.Line))
 
-        if (retrieving) {
-            Box(
-                modifier = Modifier.fillMaxSize().padding(16.dp),
-                contentAlignment = Alignment.TopCenter,
-            ) {
-                Text(
-                    text = "FETCHING DESTINATION…",
-                    color = KoveColors.Yellow,
-                    fontFamily = KoveFonts.PressStart2P,
-                    fontSize = 11.sp,
-                    letterSpacing = 0.1.sp,
-                )
-            }
-        } else if (suggestions.isEmpty() && query.length >= 2) {
-            Box(
-                modifier = Modifier.fillMaxSize().padding(16.dp),
-                contentAlignment = Alignment.TopCenter,
-            ) {
-                Text(
-                    text = "No matches.",
-                    color = KoveColors.Sky.copy(alpha = 0.55f),
-                    fontFamily = KoveFonts.VT323,
-                    fontSize = 18.sp,
-                )
-            }
-        } else if (suggestions.isNotEmpty()) {
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
+        when {
+            retrieving -> SearchMessage("目的地を取得しています…")
+            suggestions.isEmpty() && query.length >= 2 -> SearchMessage("該当する場所がありません")
+            suggestions.isNotEmpty() -> LazyColumn(modifier = Modifier.fillMaxSize()) {
                 items(suggestions) { sug ->
                     SuggestionRow(
                         name = sug.name,
@@ -285,400 +290,317 @@ fun FullscreenSearch(
 }
 
 @Composable
-private fun SuggestionRow(name: String, context: String, featureType: String, onClick: () -> Unit) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 12.dp),
+private fun SearchMessage(text: String) {
+    Box(
+        modifier = Modifier.fillMaxWidth().padding(24.dp),
+        contentAlignment = Alignment.TopCenter,
     ) {
-        Text(
-            text = featureTypeGlyph(featureType),
-            color = featureTypeColor(featureType),
-            fontFamily = KoveFonts.PressStart2P,
-            fontSize = 13.sp,
-            modifier = Modifier.width(28.dp),
-        )
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
+        Text(text = text, color = AppColors.Ink2, fontFamily = AppFonts.Sans, fontSize = 14.sp)
+    }
+}
+
+@Composable
+private fun SuggestionRow(name: String, context: String, featureType: String, onClick: () -> Unit) {
+    Column {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onClick)
+                .padding(horizontal = 16.dp, vertical = 11.dp),
         ) {
-            Text(
-                text = name,
-                color = KoveColors.Mint,
-                fontFamily = KoveFonts.VT323,
-                fontSize = 20.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (context.isNotBlank()) {
+            ResultIcon(featureTypeGlyph(featureType))
+            Box(Modifier.width(13.dp))
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
                 Text(
-                    text = context,
-                    color = KoveColors.Sky.copy(alpha = 0.7f),
-                    fontFamily = KoveFonts.VT323,
+                    text = name,
+                    color = AppColors.Ink,
+                    fontFamily = AppFonts.Sans,
                     fontSize = 15.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-            }
-        }
-    }
-}
-
-private fun featureTypeGlyph(featureType: String): String = when (featureType) {
-    "poi" -> "•"
-    "address" -> "#"
-    "place", "locality" -> "◯"
-    "neighborhood" -> "◌"
-    "street" -> "/"
-    else -> "·"
-}
-
-private fun featureTypeColor(featureType: String): Color = when (featureType) {
-    "poi" -> KoveColors.Yellow
-    "address" -> KoveColors.Mint
-    "place", "locality" -> KoveColors.Sky
-    else -> KoveColors.Paper.copy(alpha = 0.55f)
-}
-
-@Composable
-private fun ActiveDestinationChip(
-    modifier: Modifier,
-    name: String,
-    context: String,
-    distanceMeters: Double?,
-    durationSeconds: Double?,
-    status: RouteStatus,
-    onClear: () -> Unit,
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = modifier
-            .fillMaxWidth()
-            .background(KoveColors.Void2)
-            .border(1.dp, KoveColors.Mint)
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-    ) {
-        Text(
-            text = "→",
-            color = KoveColors.Mint,
-            fontFamily = KoveFonts.PressStart2P,
-            fontSize = 10.sp,
-        )
-        Box(modifier = Modifier.width(8.dp))
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                text = name,
-                color = KoveColors.Paper,
-                fontFamily = KoveFonts.VT323,
-                fontSize = 18.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = subtitleFor(status, distanceMeters, durationSeconds, context),
-                color = subtitleColor(status),
-                fontFamily = KoveFonts.VT323,
-                fontSize = 14.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        ClearButton(onClick = onClear)
-    }
-}
-
-@Composable
-private fun ClearButton(onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .size(28.dp)
-            .background(KoveColors.MagentaShadow)
-            .border(1.dp, KoveColors.Magenta)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = "X",
-            color = KoveColors.Paper,
-            fontFamily = KoveFonts.PressStart2P,
-            fontSize = 10.sp,
-        )
-    }
-}
-
-@Composable
-private fun CancelButton(onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .size(32.dp)
-            .background(KoveColors.PurpleDeep)
-            .border(1.dp, KoveColors.Sky.copy(alpha = 0.7f))
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = "X",
-            color = KoveColors.Sky,
-            fontFamily = KoveFonts.PressStart2P,
-            fontSize = 11.sp,
-        )
-    }
-}
-
-private fun subtitleFor(
-    status: RouteStatus,
-    distanceMeters: Double?,
-    durationSeconds: Double?,
-    context: String,
-): String = when (status) {
-    RouteStatus.Idle -> context
-    RouteStatus.WaitingForGps -> "WAITING ON GPS…"
-    RouteStatus.Fetching -> "FETCHING ROUTE…"
-    RouteStatus.Rerouting -> "REROUTING…"
-    RouteStatus.Active -> formatEta(distanceMeters, durationSeconds) ?: context
-    RouteStatus.Error -> "ROUTE FAILED · TAP X TO RETRY"
-}
-
-private fun subtitleColor(status: RouteStatus): Color = when (status) {
-    RouteStatus.Active -> KoveColors.Mint
-    RouteStatus.Error -> KoveColors.Magenta
-    RouteStatus.WaitingForGps, RouteStatus.Fetching, RouteStatus.Rerouting -> KoveColors.Yellow
-    RouteStatus.Idle -> KoveColors.Sky.copy(alpha = 0.7f)
-}
-
-private fun formatEta(distanceMeters: Double?, durationSeconds: Double?): String? {
-    if (distanceMeters == null || durationSeconds == null) return null
-    val minutes = (durationSeconds / 60.0).roundToInt()
-    return "${formatKm(distanceMeters)} · $minutes MIN"
-}
-
-// Quantize lat/lon to a ~10m grid so trivial GPS jitter doesn't re-fire the geocoder.
-private fun Double.roundToCellKey(): Long = (this * 10_000.0).toLong()
-
-/**
- * Full-screen route preview: the map fills everything above the route picker. Back
- * cancels the preview (any route already being navigated carries on).
- */
-@Composable
-fun RoutePreviewScreen(modifier: Modifier = Modifier) {
-    BackHandler { Navigator.cancelPreview() }
-    Column(modifier = modifier.background(KoveColors.Void)) {
-        NavMap(modifier = Modifier.fillMaxWidth().weight(1f), keepAlive = false, autoFollow = false)
-        DestinationBar(modifier = Modifier.fillMaxWidth(), onActivateSearch = {})
-    }
-}
-
-/**
- * Google Maps-style route picker: destination header, avoid toggles, one card per
- * candidate route (tap to select — the map highlights it too), and START.
- */
-@Composable
-private fun RoutePreviewSheet(
-    modifier: Modifier,
-    preview: RoutePreview,
-    options: MapboxDirections.Options,
-) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .background(KoveColors.Void2)
-            .border(1.dp, KoveColors.Sky)
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    text = preview.destination.name,
-                    color = KoveColors.Paper,
-                    fontFamily = KoveFonts.VT323,
-                    fontSize = 20.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (preview.destination.context.isNotBlank()) {
+                if (context.isNotBlank()) {
                     Text(
-                        text = preview.destination.context,
-                        color = KoveColors.Sky.copy(alpha = 0.7f),
-                        fontFamily = KoveFonts.VT323,
-                        fontSize = 14.sp,
+                        text = context,
+                        color = AppColors.Ink2,
+                        fontFamily = AppFonts.Sans,
+                        fontSize = 13.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
-            ClearButton(onClick = { Navigator.cancelPreview() })
         }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 65.dp)
+                .height(1.dp)
+                .background(AppColors.Surface3),
+        )
+    }
+}
 
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            AvoidChip("AVOID HWY", options.avoidMotorways) {
-                Navigator.setRouteOptions(options.copy(avoidMotorways = !options.avoidMotorways))
-            }
-            AvoidChip("AVOID TOLLS", options.avoidTolls) {
-                Navigator.setRouteOptions(options.copy(avoidTolls = !options.avoidTolls))
-            }
-            AvoidChip("AVOID FERRY", options.avoidFerries) {
-                Navigator.setRouteOptions(options.copy(avoidFerries = !options.avoidFerries))
-            }
-        }
+/** Feature-type glyph for the result icon. Mapbox's types, as symbols Roboto carries. */
+private fun featureTypeGlyph(featureType: String): String = when (featureType) {
+    "poi" -> "◉"
+    "address" -> "⌂"
+    "place", "locality" -> "◍"
+    "neighborhood" -> "◌"
+    "street" -> "╱"
+    else -> "◦"
+}
 
+/**
+ * Full-screen route preview: the map fills everything, the destination sits in a floating
+ * bar at the top, and the candidates are in a bottom sheet. Back cancels the preview (a
+ * route already being navigated carries on).
+ */
+@Composable
+fun RoutePreviewScreen(modifier: Modifier = Modifier) {
+    BackHandler { Navigator.cancelPreview() }
+    val preview by Navigator.preview.collectAsState()
+    val options by Navigator.routeOptions.collectAsState()
+    val p = preview ?: return
+
+    Box(modifier = modifier.fillMaxSize().background(AppColors.Surface2)) {
+        NavMap(
+            modifier = Modifier.fillMaxSize(),
+            keepAlive = false,
+            autoFollow = false,
+            // The route sheet is taller than the connection sheet — three route rows,
+            // the avoid chips and START.
+            overlayBottomInset = 260.dp,
+        )
+
+        FloatingSearchBar(
+            placeholder = "",
+            value = p.destination.name,
+            onClick = { Navigator.cancelPreview() },
+            leading = { Glyph("←", AppColors.Ink, 20.sp) },
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+        )
+
+        RoutePreviewSheet(
+            preview = p,
+            options = options,
+            modifier = Modifier.align(Alignment.BottomCenter),
+        )
+    }
+}
+
+/**
+ * Route picker: one row per candidate (time leading, distance and via underneath), avoid
+ * toggles, and START. Time leads because that's what a rider picks on; the retro build
+ * led with distance.
+ */
+@Composable
+private fun RoutePreviewSheet(
+    preview: RoutePreview,
+    options: MapboxDirections.Options,
+    modifier: Modifier = Modifier,
+) {
+    BottomSheet(modifier = modifier) {
         when (preview.status) {
-            PreviewStatus.WaitingForGps -> PreviewMessage("WAITING ON GPS…", KoveColors.Yellow)
-            PreviewStatus.Fetching -> PreviewMessage("FINDING ROUTES…", KoveColors.Yellow)
+            PreviewStatus.WaitingForGps -> PreviewMessage("GPS を待っています…")
+            PreviewStatus.Fetching -> PreviewMessage("ルートを探しています…")
             PreviewStatus.Error -> PreviewMessage(
-                "NO ROUTE FOUND · TAP TO RETRY", KoveColors.Magenta,
+                "ルートが見つかりませんでした。タップして再試行",
+                color = AppColors.Red,
                 onClick = { Navigator.retryPreview() },
             )
             PreviewStatus.Ready -> {
                 val fastest = preview.routes.minOf { it.durationSeconds }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    preview.routes.forEachIndexed { i, r ->
-                        RouteCard(
-                            modifier = Modifier.weight(1f),
-                            route = r,
-                            selected = i == preview.selectedIndex,
-                            extraSeconds = r.durationSeconds - fastest,
-                            onClick = { Navigator.selectPreviewRoute(i) },
-                        )
-                    }
+                preview.routes.forEachIndexed { i, r ->
+                    RouteRow(
+                        route = r,
+                        selected = i == preview.selectedIndex,
+                        isFastest = r.durationSeconds <= fastest,
+                        onClick = { Navigator.selectPreviewRoute(i) },
+                    )
                 }
             }
         }
 
-        val canStart = preview.status == PreviewStatus.Ready
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(44.dp)
-                .background(if (canStart) KoveColors.SkyDeep else KoveColors.PurpleDim)
-                .border(1.dp, if (canStart) KoveColors.Sky else KoveColors.Hairline)
-                .clickable(enabled = canStart) { Navigator.startPreview() },
-            contentAlignment = Alignment.Center,
-        ) {
+        Box(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            AvoidChip("高速を避ける", options.avoidMotorways) {
+                Navigator.setRouteOptions(options.copy(avoidMotorways = !options.avoidMotorways))
+            }
+            AvoidChip("有料道路", options.avoidTolls) {
+                Navigator.setRouteOptions(options.copy(avoidTolls = !options.avoidTolls))
+            }
+            AvoidChip("フェリー", options.avoidFerries) {
+                Navigator.setRouteOptions(options.copy(avoidFerries = !options.avoidFerries))
+            }
+        }
+
+        Box(Modifier.height(14.dp))
+        AppButton(
+            label = "開始",
+            onClick = { Navigator.startPreview() },
+            enabled = preview.status == PreviewStatus.Ready,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+@Composable
+private fun RouteRow(
+    route: MapboxDirections.Route,
+    selected: Boolean,
+    isFastest: Boolean,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(12.dp)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(if (selected) AppColors.BlueTint else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Text(
-                text = "▶ START",
-                color = if (canStart) KoveColors.HotWhite else KoveColors.Paper.copy(alpha = 0.4f),
-                fontFamily = KoveFonts.PressStart2P,
-                fontSize = 13.sp,
-                letterSpacing = 0.1.sp,
+                text = formatDuration(route.durationSeconds),
+                color = if (selected) AppColors.BluePressed else AppColors.Ink,
+                fontFamily = AppFonts.Sans,
+                fontWeight = FontWeight.Medium,
+                fontSize = 19.sp,
             )
+            Text(
+                text = buildString {
+                    append(formatKm(route.distanceMeters))
+                    append(" · ")
+                    append(arrivalClock(route.durationSeconds))
+                    append(" 着")
+                    if (route.summary.isNotBlank()) append(" · ").append(route.summary)
+                },
+                color = AppColors.Ink2,
+                fontFamily = AppFonts.Sans,
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            val tags = buildList {
+                if (route.usesMotorway) add("高速")
+                if (route.usesToll) add("有料")
+                if (route.usesFerry) add("フェリー")
+            }
+            if (tags.isNotEmpty()) {
+                Text(
+                    text = tags.joinToString(" · "),
+                    color = AppColors.Ink3,
+                    fontFamily = AppFonts.Sans,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                )
+            }
+        }
+        if (isFastest) {
+            Box(Modifier.width(10.dp))
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(if (selected) AppColors.BlueTint else AppColors.Surface3)
+                    .padding(horizontal = 9.dp, vertical = 3.dp),
+            ) {
+                Text(
+                    text = "最速",
+                    color = if (selected) AppColors.BluePressed else AppColors.Ink2,
+                    fontFamily = AppFonts.Sans,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 11.sp,
+                )
+            }
         }
     }
 }
 
 @Composable
 private fun AvoidChip(label: String, on: Boolean, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(999.dp)
     Box(
         modifier = Modifier
-            .background(if (on) KoveColors.Yellow else KoveColors.Void)
-            .border(1.dp, if (on) KoveColors.Yellow else KoveColors.Hairline)
+            .clip(shape)
+            .background(if (on) AppColors.BlueTint else AppColors.Surface)
+            .then(if (on) Modifier else Modifier.border(1.dp, AppColors.Line, shape))
             .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        contentAlignment = Alignment.Center,
+            .padding(horizontal = 12.dp, vertical = 7.dp),
     ) {
         Text(
-            text = (if (on) "✓ " else "") + label,
-            color = if (on) KoveColors.Ink else KoveColors.Paper.copy(alpha = 0.75f),
-            fontFamily = KoveFonts.VT323,
-            fontSize = 15.sp,
+            text = label,
+            color = if (on) AppColors.BluePressed else AppColors.Ink2,
+            fontFamily = AppFonts.Sans,
+            fontWeight = if (on) FontWeight.Medium else FontWeight.Normal,
+            fontSize = 12.sp,
             maxLines = 1,
         )
     }
 }
 
 @Composable
-private fun PreviewMessage(text: String, color: Color, onClick: (() -> Unit)? = null) {
+private fun PreviewMessage(
+    text: String,
+    color: Color = AppColors.Ink2,
+    onClick: (() -> Unit)? = null,
+) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .let { if (onClick != null) it.clickable(onClick = onClick) else it }
-            .padding(vertical = 18.dp),
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(vertical = 20.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = text,
-            color = color,
-            fontFamily = KoveFonts.PressStart2P,
-            fontSize = 10.sp,
-            letterSpacing = 0.1.sp,
-        )
+        Text(text = text, color = color, fontFamily = AppFonts.Sans, fontSize = 14.sp)
     }
 }
 
-@Composable
-private fun RouteCard(
-    modifier: Modifier,
-    route: MapboxDirections.Route,
-    selected: Boolean,
-    extraSeconds: Double,
-    onClick: () -> Unit,
-) {
-    val extraMin = (extraSeconds / 60.0).roundToInt()
-    Column(
-        modifier = modifier
-            .background(if (selected) KoveColors.PurpleDeep else KoveColors.Void)
-            .border(if (selected) 2.dp else 1.dp, if (selected) KoveColors.SkyDeep else KoveColors.Hairline)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        verticalArrangement = Arrangement.spacedBy(1.dp),
-    ) {
-        Text(
-            text = formatPreviewDuration(route.durationSeconds),
-            color = if (selected) KoveColors.Sky else KoveColors.Paper,
-            fontFamily = KoveFonts.VT323,
-            fontSize = 22.sp,
-            maxLines = 1,
-        )
-        Text(
-            text = "${formatKm(route.distanceMeters)} · ARR ${arrivalClock(route.durationSeconds)}",
-            color = KoveColors.Paper.copy(alpha = 0.75f),
-            fontFamily = KoveFonts.VT323,
-            fontSize = 14.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-            text = if (extraMin <= 0) "FASTEST" else "+$extraMin MIN",
-            color = if (extraMin <= 0) KoveColors.Mint else KoveColors.Yellow,
-            fontFamily = KoveFonts.VT323,
-            fontSize = 14.sp,
-            maxLines = 1,
-        )
-        if (route.summary.isNotBlank()) {
-            Text(
-                text = "via ${route.summary}",
-                color = KoveColors.Paper.copy(alpha = 0.6f),
-                fontFamily = KoveFonts.VT323,
-                fontSize = 13.sp,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        val tags = buildList {
-            if (route.usesMotorway) add("HWY")
-            if (route.usesToll) add("TOLL")
-            if (route.usesFerry) add("FERRY")
-        }
-        if (tags.isNotEmpty()) {
-            Text(
-                text = tags.joinToString(" · "),
-                color = KoveColors.MagentaHot,
-                fontFamily = KoveFonts.VT323,
-                fontSize = 13.sp,
-                maxLines = 1,
-            )
-        }
-    }
+// ---------------------------------------------------------------- formatting
+
+/** Status line under the search bar while a destination is set. Null = nothing to say. */
+private fun routeNote(
+    status: RouteStatus,
+    distanceMeters: Double?,
+    durationSeconds: Double?,
+): String? = when (status) {
+    RouteStatus.Idle -> null
+    RouteStatus.WaitingForGps -> "GPS を待っています…"
+    RouteStatus.Fetching -> "ルートを取得中…"
+    RouteStatus.Rerouting -> "ルートを再探索中…"
+    RouteStatus.Error -> "ルートを取得できませんでした"
+    RouteStatus.Active ->
+        if (distanceMeters == null || durationSeconds == null) null
+        else "${formatKm(distanceMeters)} · ${formatDuration(durationSeconds)}"
+}
+
+private fun routeNoteColor(status: RouteStatus): Color = when (status) {
+    RouteStatus.Active -> AppColors.Green
+    RouteStatus.Error -> AppColors.Red
+    else -> AppColors.Ink2
 }
 
 private fun formatKm(meters: Double): String {
     val km = meters / 1000.0
-    return if (km >= 10) "${km.roundToInt()} KM" else "%.1f KM".format(km)
+    return if (km >= 10) "${km.roundToInt()} km" else "%.1f km".format(km)
+}
+
+private fun formatDuration(seconds: Double): String {
+    val totalMin = (seconds / 60.0).roundToInt().coerceAtLeast(1)
+    if (totalMin < 60) return "$totalMin 分"
+    return "${totalMin / 60} 時間 ${totalMin % 60} 分"
 }
 
 private val ARRIVAL_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 
 private fun arrivalClock(durationSeconds: Double): String =
     LocalTime.now().plusSeconds(durationSeconds.toLong()).format(ARRIVAL_FORMAT)
+
+// Quantize lat/lon to a ~10m grid so trivial GPS jitter doesn't re-fire the geocoder.
+private fun Double.roundToCellKey(): Long = (this * 10_000.0).toLong()

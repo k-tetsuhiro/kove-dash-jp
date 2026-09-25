@@ -1,6 +1,8 @@
 // Modified by k-tetsuhiro for kove-dash-jp (2026): draw and tap-select route preview candidates.
 package com.kovedash.app.ui.dash
 
+import android.graphics.Bitmap
+import android.view.Gravity
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -15,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -24,10 +27,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.setViewTreeLifecycleOwner
@@ -38,6 +44,7 @@ import com.mapbox.geojson.Point
 import com.mapbox.maps.CameraOptions
 import com.mapbox.maps.CoordinateBounds
 import com.mapbox.maps.EdgeInsets
+import com.mapbox.maps.ImageHolder
 import com.mapbox.maps.MapView
 import com.mapbox.maps.RenderedQueryGeometry
 import com.mapbox.maps.RenderedQueryOptions
@@ -47,6 +54,7 @@ import com.mapbox.maps.Style
 import com.mapbox.maps.extension.style.expressions.generated.Expression
 import com.mapbox.maps.extension.localization.localizeLabels
 import com.mapbox.maps.extension.style.layers.addLayer
+import com.mapbox.maps.extension.style.layers.addLayerBelow
 import com.mapbox.maps.extension.style.layers.generated.lineLayer
 import com.mapbox.maps.extension.style.layers.generated.symbolLayer
 import com.mapbox.maps.extension.style.layers.properties.generated.LineCap
@@ -59,8 +67,12 @@ import com.mapbox.maps.extension.style.sources.getSourceAs
 import com.mapbox.maps.plugin.PuckBearing
 import com.mapbox.maps.plugin.animation.MapAnimationOptions
 import com.mapbox.maps.plugin.animation.easeTo
+import com.mapbox.maps.plugin.attribution.attribution
 import com.mapbox.maps.plugin.gestures.addOnMapClickListener
-import com.mapbox.maps.plugin.locationcomponent.createDefault2DPuck
+import com.mapbox.maps.plugin.logo.logo
+import com.mapbox.maps.plugin.scalebar.scalebar
+import com.mapbox.maps.plugin.LocationPuck2D
+import com.mapbox.maps.plugin.locationcomponent.LocationComponentConstants
 import com.mapbox.maps.plugin.locationcomponent.location
 import com.kovedash.app.AppHost
 import com.kovedash.app.nav.ActiveRoute
@@ -68,6 +80,7 @@ import com.kovedash.app.nav.GpxCourse
 import com.kovedash.app.nav.Navigator
 import com.kovedash.app.nav.RoutePreview
 import com.kovedash.app.nav.cumulativeMeters
+import com.kovedash.app.ui.theme.AppColors
 import com.kovedash.app.ui.theme.KoveColors
 import com.kovedash.app.ui.theme.KoveFonts
 import kotlinx.coroutines.delay
@@ -89,6 +102,13 @@ fun NavMap(
     modifier: Modifier = Modifier,
     keepAlive: Boolean = false,
     autoFollow: Boolean = false,
+    // How much of the map's bottom edge the caller's bottom sheet covers. The in-app
+    // overlays inset by this so they don't end up hidden underneath it.
+    overlayBottomInset: Dp = 16.dp,
+    // True for the phone's main map: its zoom (pinch, recenter, course fit) becomes the
+    // dash map's zoom via AppHost.mapZoom. Off for route preview, whose fit-to-route zoom is
+    // a phone-only look at alternatives.
+    publishZoom: Boolean = false,
 ) {
     // collectAsState (not collectAsStateWithLifecycle) because the dash Presentation's
     // lifecycle is manually driven and can stall mid-ride — observed symptom: map froze
@@ -102,6 +122,7 @@ fun NavMap(
     // while the rider compares alternatives on the phone.
     val shownPreview = if (keepAlive) null else preview
     val dashView by AppHost.dashView.collectAsState()
+    val sharedZoom by AppHost.mapZoom.collectAsState()
     var mapView by remember { mutableStateOf<MapView?>(null) }
     var snappedToFirstFix by remember { mutableStateOf(false) }
     // Inside the dash Presentation, LocalLifecycleOwner.current resolves to the
@@ -131,8 +152,9 @@ fun NavMap(
         if (!snappedToFirstFix) {
             val camBuilder = CameraOptions.Builder()
                 .center(Point.fromLngLat(fix.lon, fix.lat))
-                .zoom(16.0)
+                .zoom(if (keepAlive) sharedZoom else AppHost.DEFAULT_MAP_ZOOM)
                 .pitch(pitch)
+            if (keepAlive) camBuilder.padding(riderLowPadding(mv))
             if (movingFastEnough) fix.bearingDeg?.let { camBuilder.bearing(it) }
             else camBuilder.bearing(0.0)
             mv.mapboxMap.setCamera(camBuilder.build())
@@ -140,9 +162,13 @@ fun NavMap(
             return@LaunchedEffect
         }
         if (!autoFollow) return@LaunchedEffect
+        // Zoom rides along with each follow step so this ease doesn't cancel a zoom change
+        // mid-animation (easeTo replaces any running camera animation).
         val camBuilder = CameraOptions.Builder()
             .center(Point.fromLngLat(fix.lon, fix.lat))
             .pitch(pitch)
+            .zoom(sharedZoom)
+            .padding(riderLowPadding(mv))
         if (movingFastEnough) fix.bearingDeg?.let { camBuilder.bearing(it) }
         mv.mapboxMap.easeTo(camBuilder.build(), MapAnimationOptions.mapAnimationOptions { duration(900L) })
     }
@@ -233,6 +259,58 @@ fun NavMap(
         }
     }
 
+    // Phone → dash zoom link. Publisher: the phone's main map reports every camera zoom
+    // change. Subscriber: the dash map eases to it; the effect restarts on each change, so the
+    // delay debounces a pinch's per-frame stream into one ease once the fingers settle.
+    DisposableEffect(mapView, publishZoom) {
+        val mv = mapView
+        val sub = if (mv != null && publishZoom && !keepAlive) {
+            mv.mapboxMap.subscribeCameraChanged { AppHost.setMapZoom(it.cameraState.zoom) }
+        } else null
+        onDispose { sub?.cancel() }
+    }
+    LaunchedEffect(sharedZoom, mapView) {
+        val mv = mapView ?: return@LaunchedEffect
+        if (!keepAlive || !snappedToFirstFix) return@LaunchedEffect
+        delay(ZOOM_SYNC_DEBOUNCE_MS)
+        mv.mapboxMap.easeTo(
+            CameraOptions.Builder().zoom(sharedZoom).build(),
+            MapAnimationOptions.mapAnimationOptions { duration(400L) },
+        )
+    }
+
+    // Map ornaments. Mapbox's wordmark + (i) attribution must stay visible (Mapbox ToS), but their default
+    // bottom-left spot sits under the phone UI's sheet / landscape side panel. Park them
+    // bottom-right, just left of the recenter button, riding the same inset as it. The dash
+    // projection (keepAlive) has no phone chrome and keeps the defaults.
+    val density = LocalDensity.current
+    LaunchedEffect(mapView, overlayBottomInset) {
+        val mv = mapView ?: return@LaunchedEffect
+        // Scale bar: this build is metric-only, but Mapbox picks units from the device locale
+        // (an English phone got "660 ft"). On the phone UI it also sat under the floating
+        // search bar, half-hidden, so it's dropped there; the dash projection keeps it in km/m.
+        mv.scalebar.updateSettings {
+            isMetricUnits = true
+            enabled = keepAlive
+        }
+        if (keepAlive) return@LaunchedEffect
+        with(density) {
+            // Vertically centred on the 48dp recenter button (ornaments are ~20dp tall).
+            val bottom = (overlayBottomInset + 14.dp).toPx()
+            val attributionEnd = (12.dp + 48.dp + 8.dp).toPx()
+            mv.attribution.updateSettings {
+                position = Gravity.BOTTOM or Gravity.END
+                marginRight = attributionEnd
+                marginBottom = bottom
+            }
+            mv.logo.updateSettings {
+                position = Gravity.BOTTOM or Gravity.END
+                marginRight = attributionEnd + 28.dp.toPx()
+                marginBottom = bottom
+            }
+        }
+    }
+
     // Encoder keep-alive tick — only when used in the dash projection pipeline.
     var tick by remember { mutableLongStateOf(0L) }
     LaunchedEffect(keepAlive) {
@@ -302,6 +380,7 @@ fun NavMap(
         }
         if (!keepAlive) {
             RecenterButton(
+                bottomInset = overlayBottomInset,
                 enabled = gpsFix != null,
                 onClick = {
                     val fix = gpsFix ?: return@RecenterButton
@@ -309,7 +388,7 @@ fun NavMap(
                     val movingFastEnough = (fix.speedMps ?: 0.0) >= MIN_BEARING_SPEED_MPS
                     val camBuilder = CameraOptions.Builder()
                         .center(Point.fromLngLat(fix.lon, fix.lat))
-                        .zoom(16.0)
+                        .zoom(AppHost.DEFAULT_MAP_ZOOM)
                     if (movingFastEnough) fix.bearingDeg?.let { camBuilder.bearing(it) }
                     // Pitch intentionally omitted — keep whatever tilt the user gestured to.
                     mv.mapboxMap.easeTo(
@@ -318,15 +397,6 @@ fun NavMap(
                     )
                 },
             )
-            // Style/GPX controls stay out of the route preview — it's for comparing routes.
-            if (shownPreview == null) {
-                ViewCycleButton(label = dashView.label, onClick = { AppHost.cycleDashView() })
-                GpxButton(
-                    course = gpxCourse,
-                    onLoad = { AppHost.requestGpxPick() },
-                    onClear = { AppHost.clearGpxCourse() },
-                )
-            }
             // Course-following HUD on the in-app map too, so progress + off-course are
             // visible without projecting. Off-course banner spans the top; the readout
             // sits mid-right, clear of both the banner and the bottom buttons.
@@ -340,73 +410,27 @@ fun NavMap(
  * Loads a GPX course (opens the file picker) or, when one is loaded, shows its name in
  * rally orange and clears it on tap. In-app map only.
  */
-@Composable
-private fun BoxScope.GpxButton(course: GpxCourse?, onLoad: () -> Unit, onClear: () -> Unit) {
-    val loaded = course != null
-    Box(
-        modifier = Modifier
-            .align(Alignment.BottomCenter)
-            .padding(bottom = 16.dp)
-            .clip(RoundedCornerShape(22.dp))
-            .background(if (loaded) Color(0xE6FF6D00) else KoveColors.Void.copy(alpha = 0.85f))
-            .border(1.dp, if (loaded) Color(0xFFFF6D00) else KoveColors.Mint.copy(alpha = 0.7f), RoundedCornerShape(22.dp))
-            .clickable { if (loaded) onClear() else onLoad() }
-            .padding(horizontal = 18.dp, vertical = 12.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = if (loaded) "✕ ${course?.name ?: "GPX"}" else "LOAD GPX",
-            color = if (loaded) Color.Black else KoveColors.Mint,
-            fontFamily = KoveFonts.PressStart2P,
-            fontSize = 11.sp,
-            letterSpacing = 0.1.sp,
-            maxLines = 1,
-        )
-    }
-}
-
 /**
  * Cycles the map view (style + pitch). Lives on the in-app map so the rider can preview
  * and select a view before/around a ride; a bike button can call the same
  * [AppHost.cycleDashView] once we confirm the wire event.
  */
 @Composable
-private fun BoxScope.ViewCycleButton(label: String, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .align(Alignment.BottomStart)
-            .padding(16.dp)
-            .clip(CircleShape)
-            .background(KoveColors.Void.copy(alpha = 0.85f))
-            .border(1.dp, KoveColors.Mint.copy(alpha = 0.7f), CircleShape)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = label,
-            color = KoveColors.Mint,
-            fontFamily = KoveFonts.PressStart2P,
-            fontSize = 12.sp,
-            letterSpacing = 0.1.sp,
-        )
-    }
-}
-
-@Composable
-private fun BoxScope.RecenterButton(enabled: Boolean, onClick: () -> Unit) {
-    val bg = if (enabled) Color(0xFF1E88E5) else Color(0x66606060)
+private fun BoxScope.RecenterButton(bottomInset: Dp, enabled: Boolean, onClick: () -> Unit) {
+    // Maps' own treatment: a white button carrying a blue arrow, not a blue button.
+    val tint = if (enabled) AppColors.Blue else AppColors.Ink3
     Box(
         modifier = Modifier
             .align(Alignment.BottomEnd)
-            .padding(16.dp)
-            .size(56.dp)
+            .padding(end = 12.dp, bottom = bottomInset)
+            .size(48.dp)
+            .shadow(2.dp, CircleShape, clip = false)
             .clip(CircleShape)
-            .background(bg)
+            .background(AppColors.Surface)
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Canvas(modifier = Modifier.size(22.dp)) {
+        Canvas(modifier = Modifier.size(20.dp)) {
             val w = size.width
             val h = size.height
             val path = Path().apply {
@@ -416,7 +440,7 @@ private fun BoxScope.RecenterButton(enabled: Boolean, onClick: () -> Unit) {
                 lineTo(0f, h)
                 close()
             }
-            drawPath(path, color = Color.White)
+            drawPath(path, color = tint)
         }
     }
 }
@@ -439,6 +463,21 @@ private fun FrameKeepAlivePip(tick: Long) {
 // local name. Hardcoded rather than Locale.getDefault(): this fork is Japan-specific,
 // same call as the metric-only unit handling.
 private val MAP_LABEL_LOCALE = java.util.Locale.JAPANESE
+
+/**
+ * Dash camera padding that puts the rider a third of the way up from the bottom instead of
+ * dead centre (the camera centres on the padded area): more road ahead, and the rider
+ * always in the same spot. Only autoFollow maps call this — the dash — and the dash map is
+ * sized to the fixed 1280×640 panel, so this stays well above the bottom fuel/gear bar.
+ */
+private fun riderLowPadding(mv: MapView): EdgeInsets =
+    EdgeInsets(mv.height * RIDER_OFFSET_FRACTION, 0.0, 0.0, 0.0)
+
+// Top padding as a fraction of map height: 1/3 → the rider sits at 2/3 down the frame.
+private const val RIDER_OFFSET_FRACTION = 1.0 / 3.0
+
+// Quiet period before the dash applies a phone zoom change (a pinch streams every frame).
+private const val ZOOM_SYNC_DEBOUNCE_MS = 150L
 
 // Speed threshold below which GPS bearing readings are too noisy to trust. ~5.4 km/h.
 private const val MIN_BEARING_SPEED_MPS = 1.5
@@ -475,9 +514,71 @@ private fun applyPuck(mv: MapView) {
     mv.location.updateSettings {
         enabled = true
         pulsingEnabled = false
-        locationPuck = createDefault2DPuck(withBearing = true)
+        locationPuck = riderPuck(mv.context.resources.displayMetrics.density)
         puckBearing = PuckBearing.COURSE
         puckBearingEnabled = true
+    }
+}
+
+/**
+ * The rider marker: a red navigation chevron with a white rim over a soft dark halo. The
+ * stock puck was a blue dot — the same blue as the route line — and once the dash's H.264
+ * encode softened the edges it vanished into the route. A different shape (points the way
+ * you're heading), a different hue and a rim/halo that separates it from any background
+ * keep it findable at a glance. The whole indicator rotates with the course bearing.
+ */
+private fun riderPuck(density: Float): LocationPuck2D {
+    val px = (PUCK_SIZE_DP * density).roundToInt()
+    val chevron = Bitmap.createBitmap(px, px, Bitmap.Config.ARGB_8888).also { bmp ->
+        val c = android.graphics.Canvas(bmp)
+        val w = px.toFloat()
+        val path = android.graphics.Path().apply {
+            moveTo(w * 0.50f, w * 0.10f)
+            lineTo(w * 0.84f, w * 0.86f)
+            lineTo(w * 0.50f, w * 0.68f)
+            lineTo(w * 0.16f, w * 0.86f)
+            close()
+        }
+        val fill = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            style = android.graphics.Paint.Style.FILL
+            color = PUCK_COLOR
+        }
+        val rim = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = 2.5f * density
+            strokeJoin = android.graphics.Paint.Join.ROUND
+            color = android.graphics.Color.WHITE
+        }
+        c.drawPath(path, fill)
+        c.drawPath(path, rim)
+    }
+    val halo = Bitmap.createBitmap(px, px, Bitmap.Config.ARGB_8888).also { bmp ->
+        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            shader = android.graphics.RadialGradient(
+                px / 2f, px / 2f, px / 2f,
+                intArrayOf(0x66000000, 0x33000000, 0x00000000),
+                floatArrayOf(0f, 0.6f, 1f),
+                android.graphics.Shader.TileMode.CLAMP,
+            )
+        }
+        android.graphics.Canvas(bmp).drawCircle(px / 2f, px / 2f, px / 2f, paint)
+    }
+    return LocationPuck2D(
+        topImage = ImageHolder.from(chevron),
+        shadowImage = ImageHolder.from(halo),
+    )
+}
+
+// ~1.6× the stock 22dp dot, so it survives the dash's video encode.
+private const val PUCK_SIZE_DP = 36f
+private val PUCK_COLOR = android.graphics.Color.parseColor("#E53935")
+
+/** Add [layer] under the rider puck when it's on the map, so no line ever covers the rider. */
+private fun com.mapbox.maps.Style.addLayerBelowPuck(layer: com.mapbox.maps.extension.style.layers.Layer) {
+    if (styleLayerExists(LocationComponentConstants.LOCATION_INDICATOR_LAYER)) {
+        addLayerBelow(layer, LocationComponentConstants.LOCATION_INDICATOR_LAYER)
+    } else {
+        addLayer(layer)
     }
 }
 
@@ -504,7 +605,7 @@ private fun renderGpxLine(style: com.mapbox.maps.Style, course: GpxCourse?) {
         return
     }
     style.addSource(geoJsonSource(GPX_SOURCE_ID) { feature(feature) })
-    style.addLayer(
+    style.addLayerBelowPuck(
         lineLayer(GPX_LAYER_ID, GPX_SOURCE_ID) {
             lineColor("#FF6D00")
             lineWidth(7.0)
@@ -537,7 +638,7 @@ private fun renderRouteLine(style: com.mapbox.maps.Style, route: ActiveRoute?) {
             feature(feature)
         }
     )
-    style.addLayer(
+    style.addLayerBelowPuck(
         lineLayer(ROUTE_LAYER_ID, ROUTE_SOURCE_ID) {
             lineColor("#1E88E5")
             lineWidth(9.0)
@@ -628,27 +729,27 @@ private fun renderPreviewLines(style: Style, preview: RoutePreview?) {
     style.addSource(geoJsonSource(PREVIEW_ALT_SOURCE_ID) { featureCollection(alts) })
     style.addSource(geoJsonSource(PREVIEW_SEL_SOURCE_ID) { featureCollection(selected) })
     style.addSource(geoJsonSource(PREVIEW_LABEL_SOURCE_ID) { featureCollection(labels) })
-    style.addLayer(
+    style.addLayerBelowPuck(
         lineLayer(PREVIEW_ALT_CASING_LAYER_ID, PREVIEW_ALT_SOURCE_ID) {
             lineColor("#7C8594"); lineWidth(11.0); lineCap(LineCap.ROUND); lineJoin(LineJoin.ROUND)
         }
     )
-    style.addLayer(
+    style.addLayerBelowPuck(
         lineLayer(PREVIEW_ALT_LAYER_ID, PREVIEW_ALT_SOURCE_ID) {
             lineColor("#B7C0CC"); lineWidth(8.0); lineCap(LineCap.ROUND); lineJoin(LineJoin.ROUND)
         }
     )
-    style.addLayer(
+    style.addLayerBelowPuck(
         lineLayer(PREVIEW_SEL_CASING_LAYER_ID, PREVIEW_SEL_SOURCE_ID) {
             lineColor("#0D47A1"); lineWidth(12.0); lineCap(LineCap.ROUND); lineJoin(LineJoin.ROUND)
         }
     )
-    style.addLayer(
+    style.addLayerBelowPuck(
         lineLayer(PREVIEW_SEL_LAYER_ID, PREVIEW_SEL_SOURCE_ID) {
             lineColor("#1E88E5"); lineWidth(8.0); lineCap(LineCap.ROUND); lineJoin(LineJoin.ROUND)
         }
     )
-    style.addLayer(
+    style.addLayerBelowPuck(
         symbolLayer(PREVIEW_LABEL_LAYER_ID, PREVIEW_LABEL_SOURCE_ID) {
             symbolPlacement(SymbolPlacement.POINT)
             textField(Expression.get("label"))

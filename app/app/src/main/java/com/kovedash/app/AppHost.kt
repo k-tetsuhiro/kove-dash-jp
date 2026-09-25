@@ -268,6 +268,18 @@ object AppHost {
     fun cycleDashView() {
         _dashView.update { DashView.entries[(it.ordinal + 1) % DashView.entries.size] }
     }
+
+    // Map zoom shared from the phone's main map to the dash map: the dash can't be pinched
+    // (and its buttons don't reach us), so it follows whatever zoom the rider set on the phone.
+    // Zoom only — the dash keeps its own center (the rider) and auto bearing/pitch.
+    private val _mapZoom = MutableStateFlow(DEFAULT_MAP_ZOOM)
+    val mapZoom: StateFlow<Double> = _mapZoom
+
+    fun setMapZoom(zoom: Double) {
+        _mapZoom.value = zoom
+    }
+
+    const val DEFAULT_MAP_ZOOM = 16.0
 }
 
 /**
