@@ -1,4 +1,5 @@
-// Modified by k-tetsuhiro for kove-dash-jp (2026): restore saved route options on attach.
+// Modified by k-tetsuhiro for kove-dash-jp (2026): restore saved route options on attach;
+// dash screen (map / rally) selection and the rally trip meter.
 package com.kovedash.app
 
 import android.content.ComponentName
@@ -15,6 +16,7 @@ import com.kovedash.app.nav.Navigator
 import com.kovedash.app.nav.haversineMeters
 import com.kovedash.app.net.GpsFix
 import com.kovedash.app.net.GpsSource
+import com.kovedash.app.rally.RallyHost
 import com.kovedash.app.service.ConnectionPhase
 import com.kovedash.app.service.DashService
 import com.kovedash.app.service.DashState
@@ -54,9 +56,11 @@ object AppHost {
         settings = KoveSettings(context.applicationContext).also { s ->
             _state.update { it.copy(savedDashPassword = s.dashPassword, savedSsidPrefix = s.dashSsidPrefix) }
             Navigator.bindRouteOptions(s.routeOptions) { s.routeOptions = it }
+            _dashScreen.value = s.dashScreen
         }
         gpsSource = GpsSource(context.applicationContext)
         startGpsIfPermitted()
+        RallyHost.start(context)
         refreshNotificationAccess()
     }
 
@@ -269,6 +273,16 @@ object AppHost {
         _dashView.update { DashView.entries[(it.ordinal + 1) % DashView.entries.size] }
     }
 
+    // What the projected video shows. Only the video: the phone keeps its map either way,
+    // and the rally meter counts regardless (RallyHost). Remembered for the next projection.
+    private val _dashScreen = MutableStateFlow(DashScreen.MAP)
+    val dashScreen: StateFlow<DashScreen> = _dashScreen
+
+    fun setDashScreen(screen: DashScreen) {
+        _dashScreen.value = screen
+        settings?.dashScreen = screen
+    }
+
     // Map zoom shared from the phone's main map to the dash map: the dash can't be pinched
     // (and its buttons don't reach us), so it follows whatever zoom the rider set on the phone.
     // Zoom only — the dash keeps its own center (the rider) and auto bearing/pitch.
@@ -281,6 +295,9 @@ object AppHost {
 
     const val DEFAULT_MAP_ZOOM = 16.0
 }
+
+/** The projected screen: the Mapbox map, or the rally trip meter (ODO / CAP / …). */
+enum class DashScreen { MAP, RALLY }
 
 /**
  * A map "view" = a Mapbox style + a camera pitch. NAV_3D/TRAIL_3D give the tilted

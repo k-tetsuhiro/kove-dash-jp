@@ -1,7 +1,12 @@
-// Modified by k-tetsuhiro for kove-dash-jp (2026): Maps-style phone UI (design/v2-mockup.html).
+// Modified by k-tetsuhiro for kove-dash-jp (2026): Maps-style phone UI (design/v2-mockup.html);
+// map / rally dash screen toggle and rally controls.
 package com.kovedash.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,6 +39,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -41,6 +47,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -49,6 +56,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.min
 import androidx.compose.ui.unit.sp
 import com.kovedash.app.AppHost
+import com.kovedash.app.DashScreen
+import com.kovedash.app.rally.RallyHost
+import com.kovedash.app.rally.RallyTripMeter
 import com.kovedash.app.nav.Navigator
 import com.kovedash.app.nav.RouteStatus
 import com.kovedash.app.service.ConnectionPhase
@@ -68,6 +78,9 @@ import com.kovedash.app.ui.dash.fallbackInstruction
 import com.kovedash.app.ui.dash.formatDistance
 import com.kovedash.app.ui.theme.AppColors
 import com.kovedash.app.ui.theme.AppFonts
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import java.util.Locale
 
 /**
  * The main screen: a full-bleed map with the search bar floating on top, map controls on
@@ -99,6 +112,9 @@ fun ConnectScreen(
     var sheetExpanded by rememberSaveable { mutableStateOf(!linked) }
     LaunchedEffect(linked) { sheetExpanded = !linked }
     LaunchedEffect(state.errorMessage) { if (state.errorMessage != null) sheetExpanded = true }
+    // With the dash on the rally screen, the turn-card slot carries the ODO controls instead.
+    val dashScreen by AppHost.dashScreen.collectAsState()
+    val showRally = linked && dashScreen == DashScreen.RALLY
 
     val sheet: @Composable (Modifier, Shape) -> Unit = { modifier, shape ->
         ConnectionSheet(
@@ -125,15 +141,16 @@ fun ConnectScreen(
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize().background(AppColors.Surface2)) {
         if (maxWidth > maxHeight) {
-            LandscapeLayout(panelWidth = min(SIDE_PANEL_MAX, maxWidth * 0.45f), topChrome, sheet)
+            LandscapeLayout(panelWidth = min(SIDE_PANEL_MAX, maxWidth * 0.45f), showRally, topChrome, sheet)
         } else {
-            PortraitLayout(topChrome, sheet)
+            PortraitLayout(showRally, topChrome, sheet)
         }
     }
 }
 
 @Composable
 private fun BoxScope.PortraitLayout(
+    showRally: Boolean,
     topChrome: @Composable () -> Unit,
     sheet: @Composable (Modifier, Shape) -> Unit,
 ) {
@@ -175,7 +192,7 @@ private fun BoxScope.PortraitLayout(
             .align(Alignment.BottomCenter)
             .padding(start = 12.dp, end = 12.dp, bottom = sheetHeight + 8.dp)
             .onSizeChanged { cardHeight = with(density) { it.height.toDp() } },
-    ) { ManeuverCard() }
+    ) { if (showRally) RallyControlCard() else ManeuverCard() }
 
     sheet(
         Modifier
@@ -188,6 +205,7 @@ private fun BoxScope.PortraitLayout(
 @Composable
 private fun BoxScope.LandscapeLayout(
     panelWidth: Dp,
+    showRally: Boolean,
     topChrome: @Composable () -> Unit,
     sheet: @Composable (Modifier, Shape) -> Unit,
 ) {
@@ -221,7 +239,7 @@ private fun BoxScope.LandscapeLayout(
     ) {
         topChrome()
         Spacer(Modifier.weight(1f))
-        ManeuverCard()
+        if (showRally) RallyControlCard() else ManeuverCard()
         sheet(Modifier, RoundedCornerShape(16.dp))
     }
 }
@@ -363,6 +381,17 @@ private fun ConnectionSheet(
             }
             in LINKED -> {
                 Box(Modifier.height(14.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "メーター画面",
+                        color = AppColors.Ink2,
+                        fontFamily = AppFonts.Sans,
+                        fontSize = 14.sp,
+                        modifier = Modifier.weight(1f),
+                    )
+                    DashScreenToggle()
+                }
+                Box(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (state.liveMode) {
                         AppButton(
@@ -416,11 +445,17 @@ private fun CollapsedSheetRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        // Linked, the row also carries the map / rally toggle, so the buttons go short —
+        // the headline beside them already says 投影中 / 接続済み.
+        if (state.phase in LINKED) {
+            DashScreenToggle()
+            Box(Modifier.width(8.dp))
+        }
         when {
             state.phase in LINKED && state.liveMode ->
-                AppButton(label = "投影を停止", tone = ButtonTone.Danger, onClick = onStopProjection)
+                AppButton(label = "停止", tone = ButtonTone.Danger, onClick = onStopProjection)
             state.phase in LINKED ->
-                AppButton(label = "画面を投影", tone = ButtonTone.Tonal, onClick = onProject)
+                AppButton(label = "投影", tone = ButtonTone.Tonal, onClick = onProject)
             isWorking(state.phase) ->
                 AppButton(label = "キャンセル", tone = ButtonTone.Text, onClick = onDisconnect)
             else ->
@@ -428,6 +463,197 @@ private fun CollapsedSheetRow(
         }
     }
 }
+
+/**
+ * Which screen the dash projection shows. Selectable while merely connected too: the
+ * choice is remembered and the next projection starts on it.
+ */
+@Composable
+private fun DashScreenToggle() {
+    val selected by AppHost.dashScreen.collectAsState()
+    val shape = RoundedCornerShape(18.dp)
+    Row(
+        modifier = Modifier
+            .height(36.dp)
+            .clip(shape)
+            .border(1.dp, AppColors.Line, shape)
+            .selectableGroup(),
+    ) {
+        ToggleSegment("地図", selected == DashScreen.MAP) { AppHost.setDashScreen(DashScreen.MAP) }
+        Box(Modifier.width(1.dp).fillMaxHeight().background(AppColors.Line))
+        ToggleSegment("ラリー", selected == DashScreen.RALLY) { AppHost.setDashScreen(DashScreen.RALLY) }
+    }
+}
+
+@Composable
+private fun ToggleSegment(label: String, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxHeight()
+            .background(if (selected) AppColors.BlueTint else AppColors.Surface)
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = if (selected) "✓ $label" else label,
+            color = if (selected) AppColors.BluePressed else AppColors.Ink2,
+            fontFamily = AppFonts.Sans,
+            fontWeight = FontWeight.Medium,
+            fontSize = 13.sp,
+        )
+    }
+}
+
+/**
+ * ODO controls while the dash shows the rally screen, in the turn card's place: the current
+ * ODO / PART and glove-sized ±0.01 (hold to repeat) and PART reset. Resetting everything
+ * sits behind ⋯ so a stray tap mid-stage can't wipe the day.
+ */
+@Composable
+private fun RallyControlCard(modifier: Modifier = Modifier) {
+    val r by RallyHost.readout.collectAsState()
+    var menuOpen by rememberSaveable { mutableStateOf(false) }
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .shadow(6.dp, RoundedCornerShape(12.dp), clip = false)
+            .clip(RoundedCornerShape(12.dp))
+            .background(AppColors.Surface)
+            .padding(12.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.Bottom,
+            modifier = Modifier.padding(horizontal = 4.dp),
+        ) {
+            RallyKey("ODO")
+            Box(Modifier.width(8.dp))
+            Text(
+                text = "%.2f".format(Locale.US, r.odoKm),
+                color = if (r.adjustingKm != null) AppColors.Blue else AppColors.Ink,
+                fontFamily = AppFonts.Mono,
+                fontWeight = FontWeight.Medium,
+                fontSize = 22.sp,
+            )
+            Box(Modifier.width(14.dp))
+            RallyKey("PART")
+            Box(Modifier.width(8.dp))
+            Text(
+                text = "%.2f".format(Locale.US, r.partKm),
+                color = AppColors.Ink2,
+                fontFamily = AppFonts.Mono,
+                fontWeight = FontWeight.Medium,
+                fontSize = 17.sp,
+            )
+            Spacer(Modifier.weight(1f))
+            if (!r.gpsOk) {
+                Text(
+                    text = "GPS ロスト",
+                    color = AppColors.Red,
+                    fontFamily = AppFonts.Sans,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 12.sp,
+                )
+            }
+        }
+        Box(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            RepeatKey("−0.01", Modifier.weight(1f)) { RallyHost.adjust(-RallyTripMeter.ADJUST_STEP_M) }
+            RepeatKey("+0.01", Modifier.weight(1f)) { RallyHost.adjust(RallyTripMeter.ADJUST_STEP_M) }
+            KeyBox(
+                label = "PART 0",
+                bg = AppColors.Surface3,
+                fg = AppColors.Ink,
+                modifier = Modifier.weight(1f).clickable { RallyHost.resetPart() },
+            )
+            KeyBox(
+                label = "⋯",
+                bg = Color.Transparent,
+                fg = AppColors.Ink2,
+                modifier = Modifier.width(48.dp).clickable { menuOpen = !menuOpen },
+            )
+        }
+        if (menuOpen) {
+            Box(Modifier.height(8.dp))
+            Box(Modifier.fillMaxWidth().height(1.dp).background(AppColors.Line))
+            Text(
+                text = "ODO・PART・時間をすべてリセット",
+                color = AppColors.Red,
+                fontFamily = AppFonts.Sans,
+                fontSize = 14.sp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        RallyHost.resetAll()
+                        menuOpen = false
+                    }
+                    .padding(horizontal = 6.dp, vertical = 12.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun RallyKey(text: String) {
+    Text(
+        text = text,
+        color = AppColors.Ink3,
+        fontFamily = AppFonts.Sans,
+        fontWeight = FontWeight.Medium,
+        fontSize = 11.sp,
+        modifier = Modifier.padding(bottom = 3.dp),
+    )
+}
+
+/** Fires on press, then repeats while held — a big ODO correction without 30 taps. */
+@Composable
+private fun RepeatKey(label: String, modifier: Modifier = Modifier, onStep: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    KeyBox(
+        label = label,
+        bg = AppColors.BlueTint,
+        fg = AppColors.BluePressed,
+        modifier = modifier.pointerInput(Unit) {
+            detectTapGestures(
+                onPress = {
+                    onStep()
+                    val repeat = scope.launch {
+                        delay(REPEAT_DELAY_MS)
+                        while (true) {
+                            onStep()
+                            delay(REPEAT_INTERVAL_MS)
+                        }
+                    }
+                    tryAwaitRelease()
+                    repeat.cancel()
+                },
+            )
+        },
+    )
+}
+
+@Composable
+private fun KeyBox(label: String, bg: Color, fg: Color, modifier: Modifier = Modifier) {
+    Box(
+        modifier = Modifier
+            .height(56.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(bg)
+            .then(modifier),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            color = fg,
+            fontFamily = AppFonts.Sans,
+            fontWeight = FontWeight.Medium,
+            fontSize = 16.sp,
+        )
+    }
+}
+
+private const val REPEAT_DELAY_MS = 400L
+private const val REPEAT_INTERVAL_MS = 100L
 
 /**
  * Upcoming maneuver, phone-side: a white card carrying the turn glyph, the distance to it
