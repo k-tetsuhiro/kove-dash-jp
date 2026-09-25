@@ -1,8 +1,9 @@
-// Modified by k-tetsuhiro for kove-dash-jp (2026): persisted route options.
+// Modified by k-tetsuhiro for kove-dash-jp (2026): persisted route options, dash screen.
 package com.kovedash.app.service
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.kovedash.app.DashScreen
 import com.kovedash.app.net.MapboxDirections
 
 /**
@@ -49,6 +50,13 @@ class KoveSettings(context: Context) {
             .putBoolean(KEY_AVOID_FERRIES, value.avoidFerries)
             .apply()
 
+    // Which screen projection shows (map / rally), kept across launches.
+    var dashScreen: DashScreen
+        get() = prefs.getString(KEY_DASH_SCREEN, null)
+            ?.let { name -> DashScreen.entries.firstOrNull { it.name == name } }
+            ?: DashScreen.MAP
+        set(value) = prefs.edit().putString(KEY_DASH_SCREEN, value.name).apply()
+
     companion object {
         private const val NAME = "kovedash.settings"
         private const val KEY_DASH_PASSWORD = "dash_password"
@@ -58,6 +66,7 @@ class KoveSettings(context: Context) {
         private const val KEY_AVOID_MOTORWAYS = "avoid_motorways"
         private const val KEY_AVOID_TOLLS = "avoid_tolls"
         private const val KEY_AVOID_FERRIES = "avoid_ferries"
+        private const val KEY_DASH_SCREEN = "dash_screen"
         const val DEFAULT_SSID_PREFIX = "CQKY_"
     }
 }

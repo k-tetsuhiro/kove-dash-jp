@@ -1,3 +1,4 @@
+// Modified by k-tetsuhiro for kove-dash-jp (2026): projected screen is map or rally (DashContent).
 package com.kovedash.app.service
 
 import android.annotation.SuppressLint
@@ -29,7 +30,7 @@ import com.kovedash.app.project.ProjectionSession
 import com.kovedash.app.proto.DashMessages
 import com.kovedash.app.proto.MiniJson
 import com.kovedash.app.proto.TelemetryProbe
-import com.kovedash.app.ui.dash.NavMap
+import com.kovedash.app.ui.dash.DashContent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -74,7 +75,7 @@ class DashService : Service() {
         tcp = DashTcpServer(scope)
         projection = ProjectionSession(applicationContext, scope)
         liveProjection = LiveProjectionSession(applicationContext, scope) {
-            NavMap(keepAlive = true, autoFollow = true)
+            DashContent()
         }
         // The session outlives individual dash connections. A dropped socket re-arms
         // the listener (rider just long-presses UP again); only when the whole session

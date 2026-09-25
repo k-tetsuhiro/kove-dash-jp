@@ -22,3 +22,14 @@ from binaries they have lawfully obtained.
 
 Product names and trademarks are the property of their respective owners and
 are used only for identification and descriptive purposes.
+
+------------------------------------------------------------------------------
+Bundled fonts
+------------------------------------------------------------------------------
+
+app/app/src/main/res/font/vt323_regular.ttf — VT323, Copyright 2011 The VT323
+Project Authors. SIL Open Font License 1.1 (third_party/fonts/VT323-OFL.txt).
+
+app/app/src/main/res/font/press_start_2p_regular.ttf — Press Start 2P,
+Copyright 2012 The Press Start 2P Project Authors. SIL Open Font License 1.1
+(third_party/fonts/PressStart2P-OFL.txt).
