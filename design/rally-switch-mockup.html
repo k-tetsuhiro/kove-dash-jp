@@ -1,0 +1,570 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>KoveDash Screen Switch</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Roboto+Mono:wght@500&family=Noto+Sans+JP:wght@400;500;700&family=VT323&family=Press+Start+2P&display=swap" rel="stylesheet" />
+<style>
+:root {
+  /* Phone: design/v2-mockup.html (Material / Maps light) */
+  --blue: #1a73e8; --blue-press: #1765cc; --blue-tint: #e8f0fe;
+  --ink: #202124; --ink-2: #5f6368; --ink-3: #80868b;
+  --line: #dadce0; --bg: #fff; --bg-2: #f8f9fa; --bg-3: #f1f3f4;
+  --green: #188038; --amber: #f9ab00; --red: #d93025;
+  --map-ground: #f3f1ec; --map-road: #fff; --map-casing: #e3dfd6; --map-park: #d7e8cf; --map-water: #cfe3f5;
+  --e1: 0 1px 2px rgba(60,64,67,.30), 0 1px 3px 1px rgba(60,64,67,.15);
+  --e2: 0 1px 3px rgba(60,64,67,.30), 0 4px 8px 3px rgba(60,64,67,.15);
+  --e3: 0 4px 4px rgba(60,64,67,.30), 0 8px 12px 6px rgba(60,64,67,.15);
+  /* Dash: KoveColors.kt */
+  --void: #0A0A14; --void2: #14142A; --mint: #02D49E; --mint-bright: #3DF0B8;
+  --sky: #95DBFF; --magenta: #DC1283; --yellow: #F8EE6A; --paper: #F5EFE0;
+  --hair: rgba(149,219,255,.26); --hair2: rgba(149,219,255,.14);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg-2); color: var(--ink);
+  font-family: Roboto, "Noto Sans JP", system-ui, sans-serif;
+  font-size: 15px; line-height: 1.6; -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 1320px; margin: 0 auto; padding: 36px 16px 64px; }
+.eyebrow { font-size: 12px; font-weight: 500; letter-spacing: .1em; color: var(--blue); margin-bottom: 6px; }
+h1 { font-size: 28px; font-weight: 700; line-height: 1.25; margin-bottom: 8px; }
+.lede { color: var(--ink-2); max-width: 70ch; margin-bottom: 28px; }
+h2 {
+  font-size: 12px; font-weight: 500; letter-spacing: .09em; color: var(--ink-3);
+  padding-bottom: 8px; border-bottom: 1px solid var(--line); margin-bottom: 16px;
+}
+
+.layout { display: grid; grid-template-columns: 360px 1fr; gap: 36px; align-items: start; }
+@media (max-width: 900px) { .layout { grid-template-columns: 1fr; } .phone-col { justify-self: center; } }
+
+/* ================= Phone ================= */
+.phone-col { width: 100%; max-width: 360px; }
+.phone {
+  width: 100%; aspect-ratio: 360 / 740; position: relative; overflow: hidden;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 30px; box-shadow: var(--e2);
+  font-size: 13px; line-height: 1.45; user-select: none;
+}
+.statusbar {
+  position: absolute; inset: 0 0 auto; height: 26px; z-index: 40;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 18px; font-size: 11px; font-weight: 500;
+}
+.map { position: absolute; inset: 0; background: var(--map-ground); }
+.map svg { width: 100%; height: 100%; display: block; }
+.searchbar {
+  position: absolute; top: 34px; left: 12px; right: 12px; z-index: 30;
+  display: flex; align-items: center; gap: 10px; height: 46px; padding: 0 6px 0 16px;
+  background: var(--bg); border-radius: 23px; box-shadow: var(--e2);
+}
+.searchbar .q { flex: 1; color: var(--ink-3); }
+.avatar { width: 34px; height: 34px; border-radius: 50%; background: var(--bg-3); display: grid; place-items: center; color: var(--ink-2); }
+.rail { position: absolute; right: 12px; top: 42%; z-index: 30; display: flex; flex-direction: column; gap: 10px; }
+.fab { width: 42px; height: 42px; border-radius: 50%; background: var(--bg); box-shadow: var(--e1); display: grid; place-items: center; color: var(--ink-2); font-size: 17px; }
+
+.bottom { position: absolute; left: 0; right: 0; bottom: 0; z-index: 35; display: flex; flex-direction: column; }
+
+/* Rally control card — replaces the maneuver card slot while RALLY is on the dash */
+.rally-card {
+  margin: 0 12px 8px; background: var(--bg); border-radius: 14px; box-shadow: var(--e2);
+  padding: 12px; display: none;
+}
+.rally-card.show { display: block; animation: rise .18s ease-out; }
+@keyframes rise { from { transform: translateY(10px); opacity: 0; } }
+.rc-read { display: flex; align-items: baseline; gap: 14px; margin-bottom: 10px; padding: 0 4px; }
+.rc-read .k { font-size: 11px; font-weight: 500; color: var(--ink-3); letter-spacing: .06em; }
+.rc-read .v { font-family: "Roboto Mono", monospace; font-size: 22px; font-weight: 500; color: var(--ink); font-variant-numeric: tabular-nums; }
+.rc-read .v.part { font-size: 17px; color: var(--ink-2); }
+.rc-read .flash { color: var(--blue); }
+.rc-btns { display: grid; grid-template-columns: 1fr 1fr 1fr 48px; gap: 8px; }
+.rc-btns button {
+  height: 56px; border-radius: 12px; border: 0; cursor: pointer;
+  font: 500 16px Roboto, "Noto Sans JP", sans-serif; font-variant-numeric: tabular-nums;
+  background: var(--blue-tint); color: var(--blue-press);
+}
+.rc-btns button:active { filter: brightness(.94); }
+.rc-btns .reset { background: var(--bg-3); color: var(--ink); font-size: 14px; }
+.rc-btns .more { background: transparent; color: var(--ink-2); font-size: 22px; }
+.menu {
+  display: none; margin-top: 8px; border-top: 1px solid var(--line); padding-top: 8px;
+}
+.menu.show { display: block; }
+.menu div { padding: 10px 6px; font-size: 14px; color: var(--ink); cursor: pointer; border-radius: 8px; }
+.menu div:hover { background: var(--bg-3); }
+.menu div.warn { color: var(--red); }
+
+/* Collapsed connection sheet */
+.sheet {
+  background: var(--bg); border-radius: 16px 16px 0 0; box-shadow: var(--e3);
+  padding: 8px 14px 20px;
+}
+.grabber { width: 32px; height: 4px; border-radius: 2px; background: var(--line); margin: 0 auto 12px; }
+.sheet-row { display: flex; align-items: center; gap: 10px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.dot.ok { background: var(--green); } .dot.live { background: var(--red); }
+.state { flex: 1; min-width: 0; font-size: 15px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 20px; overflow: hidden; flex: none; }
+.seg button {
+  border: 0; background: var(--bg); color: var(--ink-2); cursor: pointer;
+  font: 500 13px Roboto, "Noto Sans JP", sans-serif; height: 36px; padding: 0 12px;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button.on { background: var(--blue-tint); color: var(--blue-press); }
+.seg button.on::before { content: "✓"; font-size: 12px; }
+.btn {
+  border: 0; cursor: pointer; flex: none;
+  height: 36px; padding: 0 14px; border-radius: 18px; font: 500 13px Roboto, "Noto Sans JP", sans-serif;
+}
+.btn.danger { background: var(--red); color: #fff; box-shadow: var(--e1); }
+.btn.tonal { background: var(--blue-tint); color: var(--blue-press); }
+.sheet .hint { font-size: 11.5px; color: var(--ink-3); margin-top: 8px; }
+
+.toast {
+  position: absolute; left: 50%; top: 92px; transform: translate(-50%, -8px); z-index: 50;
+  background: #303134; color: #fff; font-size: 12.5px; padding: 8px 14px; border-radius: 8px;
+  opacity: 0; transition: opacity .2s, transform .2s; pointer-events: none; white-space: nowrap;
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+.phone-tools { margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap; }
+.chip {
+  border: 1px solid var(--line); background: var(--bg); border-radius: 16px; cursor: pointer;
+  font: 500 12.5px Roboto, "Noto Sans JP", sans-serif; padding: 6px 12px; color: var(--ink-2);
+}
+.chip.on { background: var(--blue-tint); color: var(--blue-press); border-color: transparent; }
+
+/* ================= Dash preview ================= */
+.dash-stage { position: relative; width: 100%; }
+.dash {
+  width: 1280px; height: 640px; position: absolute; top: 0; left: 0; transform-origin: top left;
+  background: var(--void); border-radius: 10px; overflow: hidden; box-shadow: 0 0 0 10px #1c1c22, var(--e3);
+}
+.dash-view { position: absolute; inset: 0; transition: opacity .25s; }
+.dash-view.hidden { opacity: 0; pointer-events: none; }
+.dash-off {
+  position: absolute; inset: 0; display: grid; place-items: center; text-align: center;
+  font-family: "Press Start 2P", monospace; font-size: 22px; color: #3a3a58; line-height: 2;
+}
+.dash-caption { margin-top: 22px; font-size: 13.5px; color: var(--ink-2); }
+
+/* Map view (dash) */
+.dmap svg { width: 100%; height: 100%; display: block; }
+.banner {
+  position: absolute; left: 24px; top: 24px; display: flex; align-items: center; gap: 22px;
+  background: rgba(10,10,20,.86); border-radius: 6px; padding: 18px 28px 18px 20px;
+}
+.banner .arrow { font-size: 96px; line-height: 1; color: #fff; }
+.banner .d { font-family: "Press Start 2P", monospace; font-size: 40px; color: var(--mint); }
+.banner .r { font-family: "VT323", monospace; font-size: 44px; color: var(--paper); margin-top: 6px; }
+.speed-pill {
+  position: absolute; right: 24px; bottom: 24px; background: rgba(10,10,20,.86); border-radius: 6px;
+  padding: 10px 22px; font-family: "VT323", monospace; font-size: 80px; color: #fff; line-height: 1;
+}
+.speed-pill small { font-family: "Press Start 2P", monospace; font-size: 18px; color: var(--sky); margin-left: 8px; }
+
+/* Rally view (dash) — same as design/rally-mockup.html */
+.rally {
+  display: grid; grid-template-columns: 740px 1fr; grid-template-rows: 1fr 196px; gap: 12px; padding: 16px;
+}
+.panel { background: var(--void2); border: 2px solid var(--hair); border-radius: 4px; position: relative; overflow: hidden; }
+.lbl { font-family: "Press Start 2P", monospace; font-size: 22px; color: var(--sky); letter-spacing: 1px; }
+.num { font-family: "VT323", monospace; font-variant-numeric: tabular-nums; line-height: .82; color: #fff; }
+.unit { font-family: "Press Start 2P", monospace; font-size: 20px; color: var(--sky); }
+.odo { padding: 22px 28px; display: flex; flex-direction: column; }
+.odo-head, .cap-head, .tile-head { display: flex; justify-content: space-between; align-items: center; }
+.odo-main { flex: 1; display: flex; align-items: flex-end; justify-content: flex-end; gap: 14px; padding-bottom: 6px; }
+.odo-main .num { font-size: 300px; color: var(--yellow); transition: color .15s; }
+.odo-main .num.flash { color: #fff; }
+.odo-main .unit { margin-bottom: 26px; }
+.odo-foot { border-top: 2px solid var(--hair2); padding-top: 14px; display: flex; justify-content: space-between; align-items: center; }
+.part { display: flex; align-items: baseline; gap: 16px; }
+.part .num { font-size: 72px; }
+.adj { font-family: "Press Start 2P", monospace; font-size: 18px; color: var(--void); background: var(--mint); padding: 8px 12px; border-radius: 3px; opacity: 0; transition: opacity .2s; }
+.adj.show { opacity: 1; } .adj.neg { background: var(--magenta); color: #fff; }
+.gps { font-family: "Press Start 2P", monospace; font-size: 16px; color: var(--mint); display: flex; align-items: center; gap: 10px; }
+.gps i { width: 14px; height: 14px; border-radius: 50%; background: var(--mint); display: inline-block; }
+.cap { padding: 22px 24px; display: flex; flex-direction: column; }
+.cardinal { font-family: "Press Start 2P", monospace; font-size: 30px; color: var(--mint-bright); }
+.cap-main { flex: 1; display: flex; align-items: center; justify-content: center; }
+.cap-main .num { font-size: 230px; }
+.deg { width: 30px; height: 30px; border: 7px solid var(--sky); border-radius: 50%; align-self: flex-start; margin: 34px 0 0 10px; }
+.tape { height: 78px; position: relative; overflow: hidden; border-top: 2px solid var(--hair2);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
+          mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent); }
+.tape-strip { position: absolute; top: 0; left: 0; height: 100%; }
+.tick { position: absolute; top: 0; width: 2px; background: var(--hair); }
+.tick.major { background: var(--sky); height: 26px; } .tick.minor { height: 14px; }
+.tick-lbl { position: absolute; top: 34px; transform: translateX(-50%); font-family: "Press Start 2P", monospace; font-size: 18px; color: var(--sky); }
+.tick-lbl.card { color: var(--yellow); }
+.tape-mark { position: absolute; left: 50%; top: 0; transform: translateX(-50%); border-left: 14px solid transparent; border-right: 14px solid transparent; border-top: 20px solid var(--magenta); }
+.tiles { grid-column: 1 / -1; display: grid; grid-template-columns: 230px 220px 320px 220px 1fr; gap: 12px; }
+.tile { padding: 18px 20px; display: flex; flex-direction: column; justify-content: space-between; }
+.tile .num { font-size: 100px; } .tile .unit { font-size: 16px; }
+#r-time { font-size: 94px; }
+.wx-val { display: flex; align-items: center; gap: 14px; }
+.wx-val svg { width: 56px; height: 56px; flex: none; }
+.wind { font-family: "Press Start 2P", monospace; font-size: 15px; color: var(--sky); margin-top: 6px; }
+
+/* ================= Remote ================= */
+.remote-wrap { margin-top: 40px; display: grid; grid-template-columns: 220px 1fr; gap: 28px; align-items: center; }
+@media (max-width: 640px) { .remote-wrap { grid-template-columns: 1fr; } }
+.remote {
+  width: 200px; height: 200px; border-radius: 40px; background: #2b2b33; box-shadow: var(--e3);
+  display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 12px; padding: 18px;
+}
+.remote button {
+  border: 0; border-radius: 16px; background: #43434f; color: #fff; cursor: pointer;
+  font-size: 26px; box-shadow: inset 0 -4px 0 rgba(0,0,0,.35); touch-action: manipulation;
+}
+.remote button:active { transform: translateY(2px); box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
+.remote .play { grid-column: 1 / -1; font-size: 24px; }
+.map-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.map-table th, .map-table td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.map-table th { font-size: 12px; font-weight: 500; color: var(--ink-3); }
+.map-table td:first-child { white-space: nowrap; font-weight: 500; }
+.remote-log { margin-top: 10px; font-size: 12.5px; color: var(--ink-3); min-height: 20px; font-family: "Roboto Mono", monospace; }
+
+.notes { margin-top: 44px; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.note { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; font-size: 13.5px; line-height: 1.7; }
+.note h3 { font-size: 14px; font-weight: 700; margin-bottom: 6px; }
+.note ul { padding-left: 18px; color: var(--ink-2); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">KOVEDASH · feat/rally-screen</p>
+  <h1>メーター画面の切り替え（地図 ⇄ ラリー）</h1>
+  <p class="lede">左のスマホで操作すると、右のメーター画面が切り替わります。スマホ側はずっと地図のまま。ラリーを選んでいる間だけ、ODO 補正用のボタンが出ます。下のリモコンも押せます。</p>
+
+  <div class="layout">
+    <!-- ============ Phone ============ -->
+    <div class="phone-col">
+      <h2>スマホ</h2>
+      <div class="phone" id="phone">
+        <div class="statusbar"><span>9:41</span><span>● ▲ 82%</span></div>
+        <div class="map">
+          <svg viewBox="0 0 360 740" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+            <rect width="360" height="740" fill="#f3f1ec"/>
+            <path d="M-20 520 C 80 470 120 560 230 500 S 330 420 400 450 L 400 740 L -20 740 Z" fill="#d7e8cf"/>
+            <path d="M250 -10 C 300 80 280 160 380 210 L 380 -10 Z" fill="#cfe3f5"/>
+            <g stroke="#e3dfd6" stroke-width="16" fill="none" stroke-linecap="round">
+              <path d="M-10 300 L 370 250"/><path d="M120 -10 L 170 760"/><path d="M-10 610 L 370 560"/>
+            </g>
+            <g stroke="#fff" stroke-width="11" fill="none" stroke-linecap="round">
+              <path d="M-10 300 L 370 250"/><path d="M120 -10 L 170 760"/><path d="M-10 610 L 370 560"/>
+              <path d="M150 420 C 220 400 250 360 320 370" stroke-width="7"/>
+            </g>
+            <path d="M160 620 L 140 300 L 60 290" stroke="#1a73e8" stroke-width="7" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="157" cy="560" r="16" fill="#1a73e8" opacity=".18"/>
+            <circle cx="157" cy="560" r="8" fill="#1a73e8" stroke="#fff" stroke-width="3"/>
+          </svg>
+        </div>
+        <div class="searchbar"><span style="color:var(--ink-2)">⌕</span><span class="q">目的地を検索</span><span class="avatar">⚙</span></div>
+        <div class="rail"><div class="fab">◈</div><div class="fab">⤳</div></div>
+        <div class="toast" id="toast"></div>
+
+        <div class="bottom">
+          <div class="rally-card" id="rallyCard">
+            <div class="rc-read">
+              <span class="k">ODO</span><span class="v" id="p-odo">42.18</span>
+              <span class="k">PART</span><span class="v part" id="p-part">3.62</span>
+            </div>
+            <div class="rc-btns">
+              <button id="b-minus">−0.01</button>
+              <button id="b-plus">+0.01</button>
+              <button class="reset" id="b-part">PART 0</button>
+              <button class="more" id="b-more" aria-label="その他">⋯</button>
+            </div>
+            <div class="menu" id="menu">
+              <div id="m-set">ODO を数値で入力…</div>
+              <div id="m-step">補正の刻み：0.01 km</div>
+              <div class="warn" id="m-all">ODO・PART・時間をすべてリセット</div>
+            </div>
+          </div>
+
+          <div class="sheet">
+            <div class="grabber"></div>
+            <div class="sheet-row">
+              <span class="dot" id="dot"></span>
+              <span class="state" id="state">投影中</span>
+              <div class="seg" role="radiogroup" aria-label="メーター画面">
+                <button id="s-map" role="radio">地図</button>
+                <button id="s-rally" role="radio">ラリー</button>
+              </div>
+              <button class="btn" id="projBtn">停止</button>
+            </div>
+            <p class="hint" id="sheetHint">メーターに映す画面を選べます</p>
+          </div>
+        </div>
+      </div>
+      <div class="phone-tools">
+        <button class="chip on" id="t-proj">投影中</button>
+        <button class="chip" id="t-idle">投影していない</button>
+      </div>
+    </div>
+
+    <!-- ============ Dash ============ -->
+    <div>
+      <h2>メーター（1280×640 の投影映像）</h2>
+      <div class="dash-stage" id="dashStage">
+        <div class="dash" id="dash">
+          <!-- map -->
+          <div class="dash-view dmap" id="v-map">
+            <svg viewBox="0 0 1280 640" aria-hidden="true">
+              <defs><linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#cfd8e3"/><stop offset="1" stop-color="#eef0ea"/></linearGradient></defs>
+              <rect width="1280" height="640" fill="#eef0ea"/>
+              <rect width="1280" height="150" fill="url(#sky)"/>
+              <path d="M0 150 L 1280 150 L 1280 640 L 0 640 Z" fill="#e9ecdf"/>
+              <path d="M0 330 C 300 290 500 380 1280 300 L 1280 640 L 0 640 Z" fill="#d5e6c8"/>
+              <path d="M560 150 L 470 640 M 720 150 L 820 640" stroke="#fff" stroke-width="6"/>
+              <path d="M640 150 L 600 640 L 680 640 Z" fill="#fff"/>
+              <path d="M200 240 L 1100 200" stroke="#fff" stroke-width="18"/>
+              <path d="M640 640 L 640 330 C 640 260 660 240 760 225 L 1100 205" stroke="#1a73e8" stroke-width="22" fill="none" stroke-linecap="round" opacity=".9"/>
+              <path d="M620 560 L 640 500 L 660 560 L 640 548 Z" fill="#1a73e8" stroke="#fff" stroke-width="5"/>
+            </svg>
+            <div class="banner">
+              <span class="arrow">↱</span>
+              <div><div class="d">350 m</div><div class="r">〇〇通り</div></div>
+            </div>
+            <div class="speed-pill"><span id="m-spd">58</span><small>km/h</small></div>
+          </div>
+
+          <!-- rally -->
+          <div class="dash-view rally hidden" id="v-rally">
+            <section class="panel odo">
+              <div class="odo-head"><span class="lbl">ODO</span><span class="gps"><i></i>GPS 3D</span></div>
+              <div class="odo-main"><span class="num" id="r-odo">42.18</span><span class="unit">km</span></div>
+              <div class="odo-foot">
+                <div class="part"><span class="lbl">PART</span><span class="num" id="r-part">3.62</span><span class="unit">km</span></div>
+                <span class="adj" id="r-adj">+0.01</span>
+              </div>
+            </section>
+            <section class="panel cap">
+              <div class="cap-head"><span class="lbl">CAP</span><span class="cardinal" id="r-card">SW</span></div>
+              <div class="cap-main"><span class="num" id="r-cap">245</span><span class="deg"></span></div>
+              <div class="tape"><div class="tape-strip" id="strip"></div><div class="tape-mark"></div></div>
+            </section>
+            <div class="tiles">
+              <section class="panel tile"><div class="tile-head"><span class="lbl">SPEED</span><span class="unit">km/h</span></div><span class="num" id="r-spd">58</span></section>
+              <section class="panel tile"><div class="tile-head"><span class="lbl">AVG</span><span class="unit">km/h</span></div><span class="num" id="r-avg">39.5</span></section>
+              <section class="panel tile"><div class="tile-head"><span class="lbl">TIME</span></div><span class="num" id="r-time">1:04:07</span></section>
+              <section class="panel tile"><div class="tile-head"><span class="lbl">ALT</span><span class="unit">m</span></div><span class="num" id="r-alt">1240</span></section>
+              <section class="panel tile">
+                <span class="lbl">WEATHER</span>
+                <div>
+                  <div class="wx-val">
+                    <svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="24" cy="24" r="11" fill="#F8EE6A"/><g stroke="#F8EE6A" stroke-width="4" stroke-linecap="round"><path d="M24 4v5M24 39v5M4 24h5M39 24h5M10 10l3.5 3.5M34.5 34.5L38 38M10 38l3.5-3.5M34.5 13.5L38 10"/></g><path d="M22 52h30a10 10 0 0 0 0-20 14 14 0 0 0-26 4 8 8 0 0 0-4 16z" fill="#F5EFE0"/></svg>
+                    <span class="num">18</span><span class="unit">℃</span>
+                  </div>
+                  <div class="wind">WIND 3 m/s</div>
+                </div>
+              </section>
+            </div>
+          </div>
+
+          <!-- not projecting -->
+          <div class="dash-view hidden" id="v-off">
+            <div class="dash-off">純正メーター表示<br><span style="font-size:15px;color:#2c2c44">（映像は送っていません）</span></div>
+          </div>
+        </div>
+      </div>
+      <p class="dash-caption" id="dashCaption"></p>
+
+      <!-- ============ Remote ============ -->
+      <div class="remote-wrap">
+        <div>
+          <div class="remote" aria-label="ハンドル用 Bluetooth リモコン">
+            <button id="r-prev" aria-label="曲戻し">⏮</button>
+            <button id="r-next" aria-label="曲送り">⏭</button>
+            <button class="play" id="r-play" aria-label="再生/一時停止">⏯</button>
+          </div>
+        </div>
+        <div>
+          <h2>ハンドルの Bluetooth リモコン（後で追加）</h2>
+          <table class="map-table">
+            <tr><th>ボタン（届く信号）</th><th>操作</th></tr>
+            <tr><td>⏮ 曲戻し</td><td>ODO −0.01（ラリー表示中）</td></tr>
+            <tr><td>⏭ 曲送り</td><td>ODO +0.01（ラリー表示中）</td></tr>
+            <tr><td>⏯ 長押し</td><td>PART を 0 に</td></tr>
+            <tr><td>⏯ 2回押し</td><td>地図 ⇄ ラリー を切り替え</td></tr>
+          </table>
+          <p class="remote-log" id="remoteLog">リモコンのボタンを押してみてください</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="notes">
+    <div class="note">
+      <h3>切り替えの置き場所</h3>
+      <ul>
+        <li>接続シートの折りたたみ行に「地図 | ラリー」。投影の開始・停止と同じ場所</li>
+        <li>投影していない間も選べる。次に投影したときその画面で始まる</li>
+        <li>選んだ画面はアプリを閉じても覚えておく</li>
+      </ul>
+    </div>
+    <div class="note">
+      <h3>スマホ側は地図のまま</h3>
+      <ul>
+        <li>切り替わるのはメーターに送る映像だけ</li>
+        <li>ラリー中はナビのカードの位置に補正ボタンを出す（高さ 56dp、グローブで押せる大きさ）</li>
+        <li>全リセットなど誤操作が怖いものは「⋯」の中へ</li>
+      </ul>
+    </div>
+    <div class="note">
+      <h3>やらないこと</h3>
+      <ul>
+        <li>ナビ中に自動で地図へ切り替え（紙のコマ図派には邪魔）</li>
+        <li>メーターのボタンでの切り替え（ボタンの信号がスマホに届かない）</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const st = { mode: 'map', projecting: true, odo: 42.18, part: 3.62, t: 3847, spd: 58, cap: 245, capT: 245, alt: 1240 };
+  try { const m = localStorage.getItem('kd-mode'); if (m === 'map' || m === 'rally') st.mode = m; } catch (e) {}
+  if (location.hash === '#rally' || location.hash === '#map') st.mode = location.hash.slice(1);
+
+  // Scale the 1280×640 dash to its column.
+  const stage = $('dashStage'), dash = $('dash');
+  function fit() { const s = stage.clientWidth / 1280; dash.style.transform = `scale(${s})`; stage.style.height = 640 * s + 'px'; }
+  addEventListener('resize', fit); fit();
+
+  // Compass tape.
+  const PX = 6, strip = $('strip');
+  const CARD = { 0: 'N', 45: 'NE', 90: 'E', 135: 'SE', 180: 'S', 225: 'SW', 270: 'W', 315: 'NW' };
+  let h = '';
+  for (let d = -360; d <= 720; d += 5) {
+    const x = (d + 360) * PX, n = ((d % 360) + 360) % 360;
+    h += `<div class="tick ${n % 15 === 0 ? 'major' : 'minor'}" style="left:${x}px"></div>`;
+    if (n % 45 === 0) h += `<div class="tick-lbl card" style="left:${x}px">${CARD[n]}</div>`;
+    else if (n % 30 === 0) h += `<div class="tick-lbl" style="left:${x}px">${n}</div>`;
+  }
+  strip.innerHTML = h;
+
+  let toastT;
+  function toast(msg) {
+    const t = $('toast'); t.textContent = msg; t.classList.add('show');
+    clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 1400);
+  }
+
+  function setMode(m, source) {
+    if (st.mode === m) return;
+    st.mode = m;
+    try { localStorage.setItem('kd-mode', m); } catch (e) {}
+    $('menu').classList.remove('show');
+    toast(m === 'rally' ? 'メーターをラリー表示にしました' : 'メーターを地図表示にしました');
+    if (source) log(source);
+    renderUi();
+  }
+
+  let adjT;
+  function adjust(delta) {
+    st.odo = Math.max(0, st.odo + delta); st.part = Math.max(0, st.part + delta);
+    const a = $('r-adj');
+    a.textContent = (delta > 0 ? '+' : '−') + Math.abs(delta).toFixed(2);
+    a.classList.toggle('neg', delta < 0); a.classList.add('show');
+    $('r-odo').classList.add('flash'); $('p-odo').classList.add('flash');
+    clearTimeout(adjT);
+    adjT = setTimeout(() => { a.classList.remove('show'); $('r-odo').classList.remove('flash'); $('p-odo').classList.remove('flash'); }, 900);
+    renderNums();
+  }
+
+  function renderUi() {
+    const rally = st.mode === 'rally';
+    $('s-map').classList.toggle('on', !rally); $('s-map').setAttribute('aria-checked', !rally);
+    $('s-rally').classList.toggle('on', rally); $('s-rally').setAttribute('aria-checked', rally);
+    $('rallyCard').classList.toggle('show', rally && st.projecting);
+    $('dot').className = 'dot ' + (st.projecting ? 'live' : 'ok');
+    $('state').textContent = st.projecting ? '投影中' : '接続済み';
+    const pb = $('projBtn');
+    pb.textContent = st.projecting ? '停止' : '投影';
+    pb.className = 'btn ' + (st.projecting ? 'danger' : 'tonal');
+    $('sheetHint').textContent = st.projecting ? 'メーターに映す画面を選べます' : '次に投影したとき、選んだ画面で始まります';
+    $('v-map').classList.toggle('hidden', !(st.projecting && !rally));
+    $('v-rally').classList.toggle('hidden', !(st.projecting && rally));
+    $('v-off').classList.toggle('hidden', st.projecting);
+    $('t-proj').classList.toggle('on', st.projecting); $('t-idle').classList.toggle('on', !st.projecting);
+    $('dashCaption').textContent = !st.projecting
+      ? '投影していない間は純正の表示（ナビ・天気・標高は BLE で出る）。'
+      : rally ? 'ラリー表示：ODO・CAP・速度・平均・時間・標高・天気。' : '地図表示：いまの NavMap（ナビ中は曲がる方向を上に表示）。';
+  }
+
+  const fmtTime = s => { s = Math.floor(s); return `${Math.floor(s / 3600)}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; };
+  function renderNums() {
+    $('r-odo').textContent = $('p-odo').textContent = st.odo.toFixed(2);
+    $('r-part').textContent = $('p-part').textContent = st.part.toFixed(2);
+    $('r-spd').textContent = $('m-spd').textContent = Math.round(st.spd);
+    $('r-avg').textContent = (st.odo / (st.t / 3600)).toFixed(1);
+    $('r-time').textContent = fmtTime(st.t);
+    $('r-alt').textContent = Math.round(st.alt);
+    const c = ((Math.round(st.cap) % 360) + 360) % 360;
+    $('r-cap').textContent = String(c).padStart(3, '0');
+    $('r-card').textContent = ['N','NE','E','SE','S','SW','W','NW'][Math.round(c / 45) % 8];
+    strip.style.transform = `translateX(${strip.parentElement.clientWidth / 2 - (st.cap + 360) * PX}px)`;
+  }
+
+  let last = performance.now();
+  function tick(now) {
+    const dt = Math.min(.1, (now - last) / 1000); last = now;
+    st.t += dt;
+    st.spd += (Math.random() - .5) * 6 * dt + (60 - st.spd) * .05 * dt;
+    st.odo += st.spd * dt / 3600; st.part += st.spd * dt / 3600;
+    if (Math.random() < dt * .25) st.capT = st.cap + (Math.random() - .5) * 70;
+    st.cap += (st.capT - st.cap) * Math.min(1, dt * 1.5);
+    if (st.cap > 360) { st.cap -= 360; st.capT -= 360; } if (st.cap < 0) { st.cap += 360; st.capT += 360; }
+    st.alt += Math.sin(now / 9000) * 2.2 * dt;
+    renderNums();
+    requestAnimationFrame(tick);
+  }
+
+  // Phone controls
+  $('s-map').onclick = () => setMode('map');
+  $('s-rally').onclick = () => setMode('rally');
+  $('b-minus').onclick = () => adjust(-.01);
+  $('b-plus').onclick = () => adjust(.01);
+  $('b-part').onclick = () => { st.part = 0; toast('PART を 0 にしました'); renderNums(); };
+  $('b-more').onclick = () => $('menu').classList.toggle('show');
+  $('m-all').onclick = () => { st.odo = 0; st.part = 0; st.t = .001; $('menu').classList.remove('show'); toast('すべてリセットしました'); };
+  $('m-set').onclick = () => { $('menu').classList.remove('show'); toast('（数値入力ダイアログ）'); };
+  $('m-step').onclick = () => toast('（0.01 / 0.05 / 0.1 km から選択）');
+  const setProj = p => { st.projecting = p; renderUi(); };
+  $('projBtn').onclick = () => setProj(!st.projecting);
+  $('t-proj').onclick = () => setProj(true);
+  $('t-idle').onclick = () => setProj(false);
+
+  // Remote: prev/next = ±0.01 in rally, play long-press = PART 0, double = switch.
+  function log(msg) { $('remoteLog').textContent = msg; }
+  $('r-prev').onclick = () => { if (st.mode === 'rally' && st.projecting) { adjust(-.01); log('⏮ → ODO −0.01'); } else log('⏮ → 地図表示中は何もしない'); };
+  $('r-next').onclick = () => { if (st.mode === 'rally' && st.projecting) { adjust(.01); log('⏭ → ODO +0.01'); } else log('⏭ → 地図表示中は何もしない'); };
+  let downAt = 0, longT, clickT, clicks = 0, longFired = false;
+  const play = $('r-play');
+  play.addEventListener('pointerdown', () => {
+    downAt = performance.now(); longFired = false;
+    longT = setTimeout(() => { longFired = true; clicks = 0; st.part = 0; toast('PART を 0 にしました'); log('⏯ 長押し → PART 0'); renderNums(); }, 700);
+  });
+  play.addEventListener('pointerup', () => {
+    clearTimeout(longT);
+    if (longFired) return;
+    clicks++;
+    clearTimeout(clickT);
+    clickT = setTimeout(() => {
+      if (clicks >= 2) setMode(st.mode === 'map' ? 'rally' : 'map', '⏯ 2回押し → 画面切り替え');
+      else log('⏯ 1回 → 何もしない（音楽の再生/停止に残す）');
+      clicks = 0;
+    }, 300);
+  });
+  play.addEventListener('pointerleave', () => clearTimeout(longT));
+
+  renderUi(); renderNums(); requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>

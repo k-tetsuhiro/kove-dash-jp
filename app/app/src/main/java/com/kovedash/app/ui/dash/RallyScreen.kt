@@ -1,4 +1,4 @@
-// Added by k-tetsuhiro for kove-dash-jp (2026): projected rally trip-meter screen.
+// Added by k-tetsuhiro for kove-dash-jp (2026): projected rally trip-meter screen (design/rally-mockup.html).
 package com.kovedash.app.ui.dash
 
 import androidx.compose.foundation.Canvas
