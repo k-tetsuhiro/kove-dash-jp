@@ -367,7 +367,7 @@ private fun ArrowGlyph(modifier: Modifier, type: String, modifier_: String?, fon
     }
 }
 
-private fun arrowFor(type: String, modifier: String?): String = when (type) {
+internal fun arrowFor(type: String, modifier: String?): String = when (type) {
     "arrive" -> "◉"
     "depart" -> "•"
     "roundabout", "rotary", "exit roundabout", "exit rotary", "roundabout turn" -> "↻"
@@ -384,7 +384,7 @@ private fun arrowFor(type: String, modifier: String?): String = when (type) {
     }
 }
 
-private fun fallbackInstruction(type: String, modifier: String?): String = when (type) {
+internal fun fallbackInstruction(type: String, modifier: String?): String = when (type) {
     "arrive" -> "Arrive at destination"
     "depart" -> "Begin route"
     else -> buildString {
