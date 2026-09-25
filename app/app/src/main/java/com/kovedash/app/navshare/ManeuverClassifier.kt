@@ -3,13 +3,13 @@ package com.kovedash.app.navshare
 /**
  * Turns the raw fields of a Google Maps navigation notification into a [Maneuver].
  *
- * This interface is the ONLY seam a future icon-bitmap classifier needs: swap the impl
- * on [NavNotificationListener] and nothing else in the silo changes. Text parsing (the
- * MVP) is English-only and brittle to Maps wording; icon matching (Gadgetbridge-style,
- * a Hamming match on the maneuver bitmap) is locale-independent and is the planned upgrade.
+ * Text parsing is English-only and brittle to Maps wording, so [NavNotificationListener]
+ * wraps it in [IconAwareManeuverClassifier], which falls back to the maneuver-arrow bitmap
+ * (Gadgetbridge-style Hamming match, locale-independent) when the text names no direction.
  */
 interface ManeuverClassifier {
-    fun classify(title: String?, text: String?, subText: String?): Maneuver
+    /** @param icon the notification's maneuver arrow, when one could be read (else null). */
+    fun classify(title: String?, text: String?, subText: String?, icon: ArrowIcon? = null): Maneuver
 }
 
 /**
@@ -22,9 +22,10 @@ interface ManeuverClassifier {
  */
 class TextManeuverClassifier : ManeuverClassifier {
 
-    override fun classify(title: String?, text: String?, subText: String?): Maneuver {
-        // The instruction lives in `text`; fall back to title just in case.
-        val s = (text ?: title ?: "").lowercase()
+    override fun classify(title: String?, text: String?, subText: String?, icon: ArrowIcon?): Maneuver {
+        // Classic Maps puts the instruction in `text`; ProgressStyle puts it in `title` and leaves
+        // `text` null or blank. Same field choice as NavNotificationParser.parse's `instruction`.
+        val s = (text?.takeIf { it.isNotBlank() } ?: title ?: "").lowercase()
         if (s.isBlank()) return Maneuver.UNKNOWN
 
         return when {
@@ -67,5 +68,31 @@ class TextManeuverClassifier : ManeuverClassifier {
 
             else -> Maneuver.UNKNOWN
         }
+    }
+}
+
+/**
+ * Text first, icon second. Maps' wording is authoritative when it names the maneuver, and each
+ * such frame teaches [memory] what that icon looks like. When the text is silent (UNKNOWN or a
+ * bare CONTINUE — Japanese named-intersection frames read "〇〇交差点 · onto 〇〇通り"), the
+ * icon decides: a learned match first, then the reference-free [ArrowIcon.geometricGuess].
+ *
+ * CONTINUE is overridable because "straight" is also what a silent frame degrades to; an icon
+ * that clearly leans left/right is better evidence than the absence of a turn word.
+ */
+class IconAwareManeuverClassifier(
+    private val text: ManeuverClassifier,
+    private val memory: IconManeuverMemory,
+) : ManeuverClassifier {
+
+    override fun classify(title: String?, text: String?, subText: String?, icon: ArrowIcon?): Maneuver {
+        val fromText = this.text.classify(title, text, subText, icon)
+        if (icon == null) return fromText
+        if (fromText != Maneuver.UNKNOWN && fromText != Maneuver.CONTINUE) {
+            memory.learn(icon, fromText)
+            return fromText
+        }
+        val fromIcon = memory.lookup(icon) ?: icon.geometricGuess()
+        return if (fromIcon != Maneuver.UNKNOWN) fromIcon else fromText
     }
 }

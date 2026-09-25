@@ -94,12 +94,12 @@ object NavNotificationParser {
      * @return a [NavUpdate], or null if the notification carries nothing usable (so the
      *         caller can drop non-nav / empty frames).
      */
-    fun parse(extras: Bundle, classifier: ManeuverClassifier): NavUpdate? {
+    fun parse(extras: Bundle, classifier: ManeuverClassifier, icon: ArrowIcon? = null): NavUpdate? {
         val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()
         val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()
         val subText = extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString()
 
-        val maneuver = classifier.classify(title, text, subText)
+        val maneuver = classifier.classify(title, text, subText, icon)
         val distance = parseDistanceToMeters(title)
 
         // Nothing to say: no recognizable maneuver AND no distance → not a nav frame we care about.

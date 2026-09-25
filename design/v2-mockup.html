@@ -1,0 +1,781 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>KoveDash V2 — Maps-style phone UI</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+:root {
+  /* Google Material / Maps light. Neutrals carry a slight blue bias so they sit
+     with the accent instead of reading as flat grey. */
+  --blue:       #1a73e8;
+  --blue-press: #1765cc;
+  --blue-tint:  #e8f0fe;
+  --ink:        #202124;
+  --ink-2:      #5f6368;
+  --ink-3:      #80868b;
+  --line:       #dadce0;
+  --bg:         #ffffff;
+  --bg-2:       #f8f9fa;
+  --bg-3:       #f1f3f4;
+  --green:      #188038;
+  --amber:      #f9ab00;
+  --red:        #d93025;
+
+  /* Map ground, matching Mapbox streets/outdoors light. */
+  --map-ground: #f3f1ec;
+  --map-road:   #ffffff;
+  --map-casing: #e3dfd6;
+  --map-park:   #d7e8cf;
+  --map-water:  #cfe3f5;
+
+  /* Material elevation. */
+  --e1: 0 1px 2px rgba(60,64,67,.30), 0 1px 3px 1px rgba(60,64,67,.15);
+  --e2: 0 1px 3px rgba(60,64,67,.30), 0 4px 8px 3px rgba(60,64,67,.15);
+  --e3: 0 4px 4px rgba(60,64,67,.30), 0 8px 12px 6px rgba(60,64,67,.15);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg-2);
+  color: var(--ink);
+  font-family: Roboto, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding-block: 48px 80px;
+  padding-left: 24px;
+  padding-right: 24px;
+}
+
+/* ---------- document furniture ---------- */
+
+.doc-head { max-width: 62ch; margin-bottom: 44px; }
+.eyebrow {
+  font-size: 12px; font-weight: 500; letter-spacing: .10em;
+  text-transform: uppercase; color: var(--blue); margin: 0 0 10px;
+}
+h1 {
+  font-size: 34px; font-weight: 700; line-height: 1.2;
+  margin: 0 0 14px; text-wrap: balance; letter-spacing: -.01em;
+}
+.lede { margin: 0 0 18px; color: var(--ink-2); font-size: 16px; }
+.scope {
+  display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px;
+}
+.scope span {
+  font-size: 12px; font-weight: 500; padding: 5px 11px; border-radius: 999px;
+  background: var(--bg-3); color: var(--ink-2);
+}
+.scope span.on { background: var(--blue-tint); color: var(--blue-press); }
+
+h2 {
+  font-size: 13px; font-weight: 500; letter-spacing: .09em;
+  text-transform: uppercase; color: var(--ink-3);
+  margin: 0 0 20px; padding-bottom: 10px; border-bottom: 1px solid var(--line);
+}
+section { margin-top: 60px; }
+
+/* ---------- tokens ---------- */
+
+.tokens { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.swatch {
+  border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--bg);
+}
+.swatch .chip { height: 56px; }
+.swatch .meta { padding: 9px 11px; }
+.swatch .name { font-size: 13px; font-weight: 500; }
+.swatch .hex {
+  font-family: "Roboto Mono", ui-monospace, monospace;
+  font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums;
+}
+.swatch .role { font-size: 11px; color: var(--ink-2); margin-top: 2px; }
+
+.type-spec { display: grid; gap: 2px; }
+.type-row {
+  display: grid; grid-template-columns: 130px 1fr; gap: 20px; align-items: baseline;
+  padding: 12px 0; border-bottom: 1px solid var(--line);
+}
+.type-row .k {
+  font-family: "Roboto Mono", ui-monospace, monospace;
+  font-size: 11px; color: var(--ink-3);
+}
+
+/* ---------- phone frames ---------- */
+
+.screens {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 340px));
+  gap: 40px 28px; justify-content: start;
+}
+.screen { min-width: 0; }
+.screen figcaption { margin-top: 14px; }
+.screen .cap-title { font-size: 15px; font-weight: 500; }
+.screen .cap-note { font-size: 13.5px; color: var(--ink-2); margin-top: 4px; }
+
+.phone {
+  width: 100%; max-width: 320px; aspect-ratio: 320 / 640;
+  border: 1px solid var(--line); border-radius: 26px; background: var(--bg);
+  box-shadow: var(--e2); overflow: hidden; position: relative;
+  font-size: 12px; line-height: 1.45;
+}
+
+.statusbar {
+  position: absolute; inset: 0 0 auto 0; height: 22px; z-index: 40;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 14px; font-size: 10px; font-weight: 500; color: var(--ink);
+}
+.statusbar.on-map { color: var(--ink); }
+
+/* fake map */
+.map { position: absolute; inset: 0; background: var(--map-ground); }
+.map svg { width: 100%; height: 100%; display: block; }
+
+/* floating search pill */
+.searchbar {
+  position: absolute; top: 30px; left: 12px; right: 12px; z-index: 30;
+  display: flex; align-items: center; gap: 10px;
+  height: 44px; padding: 0 6px 0 14px;
+  background: var(--bg); border-radius: 22px; box-shadow: var(--e2);
+}
+.searchbar .q { flex: 1; color: var(--ink-3); font-size: 13px; }
+.searchbar .q.filled { color: var(--ink); }
+.avatar {
+  width: 32px; height: 32px; border-radius: 50%; flex: none;
+  background: var(--bg-3); display: grid; place-items: center;
+}
+
+/* right-side control rail */
+.rail {
+  position: absolute; right: 12px; z-index: 30;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.fab {
+  width: 40px; height: 40px; border-radius: 50%; background: var(--bg);
+  box-shadow: var(--e1); display: grid; place-items: center;
+}
+.fab.primary { background: var(--blue); }
+.fab.lg { width: 48px; height: 48px; }
+
+/* bottom sheet */
+.sheet {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 35;
+  background: var(--bg); border-radius: 16px 16px 0 0; box-shadow: var(--e3);
+  padding: 8px 16px 18px;
+}
+.grabber {
+  width: 32px; height: 4px; border-radius: 2px; background: var(--line);
+  margin: 0 auto 12px;
+}
+.sheet-row { display: flex; align-items: center; gap: 12px; }
+.sheet h3 { margin: 0; font-size: 15px; font-weight: 500; letter-spacing: 0; }
+.sheet .sub { font-size: 12px; color: var(--ink-2); margin-top: 1px; }
+
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.dot.idle  { background: var(--ink-3); }
+.dot.work  { background: var(--amber); }
+.dot.ok    { background: var(--green); }
+.dot.live  { background: var(--red); }
+
+/* material buttons */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  height: 40px; padding: 0 22px; border-radius: 20px;
+  font-size: 13px; font-weight: 500; white-space: nowrap;
+}
+.btn.filled  { background: var(--blue); color: #fff; box-shadow: var(--e1); }
+.btn.tonal   { background: var(--blue-tint); color: var(--blue-press); }
+.btn.outline { border: 1px solid var(--line); color: var(--blue-press); background: var(--bg); }
+.btn.text    { color: var(--blue-press); padding: 0 12px; }
+.btn.danger  { background: var(--red); color: #fff; box-shadow: var(--e1); }
+.btn.block   { display: flex; width: 100%; }
+.btn-row { display: flex; gap: 8px; margin-top: 14px; }
+
+/* linear progress */
+.progress { height: 4px; border-radius: 2px; background: var(--bg-3); overflow: hidden; margin-top: 14px; }
+.progress i { display: block; height: 100%; background: var(--blue); }
+
+/* search results */
+.sheet-full {
+  position: absolute; inset: 22px 0 0 0; z-index: 36; background: var(--bg);
+  display: flex; flex-direction: column;
+}
+.search-head {
+  display: flex; align-items: center; gap: 12px; height: 52px;
+  padding: 0 14px; border-bottom: 1px solid var(--line);
+}
+.result {
+  display: flex; align-items: center; gap: 13px; padding: 11px 16px;
+}
+.result + .result { border-top: 1px solid var(--bg-3); }
+.result .ic {
+  width: 34px; height: 34px; border-radius: 50%; background: var(--bg-3);
+  display: grid; place-items: center; flex: none;
+}
+.result .name { font-size: 13px; color: var(--ink); }
+.result .ctx  { font-size: 11px; color: var(--ink-2); }
+.result .dist {
+  margin-left: auto; font-size: 11px; color: var(--ink-2); flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+/* route cards */
+.route {
+  display: flex; align-items: center; gap: 12px; padding: 11px 12px;
+  border-radius: 12px; border: 1px solid transparent;
+}
+.route.sel { background: var(--blue-tint); border-color: rgba(26,115,232,.32); }
+.route .time { font-size: 17px; font-weight: 500; }
+.route.sel .time { color: var(--blue-press); }
+.route .via { font-size: 11px; color: var(--ink-2); }
+.route .badge {
+  margin-left: auto; font-size: 10px; font-weight: 500; padding: 3px 9px;
+  border-radius: 999px; background: var(--bg-3); color: var(--ink-2); flex: none;
+}
+.route.sel .badge { background: rgba(26,115,232,.14); color: var(--blue-press); }
+
+.chips { display: flex; gap: 7px; margin-top: 12px; flex-wrap: wrap; }
+.chip-tog {
+  font-size: 11px; padding: 6px 12px; border-radius: 999px;
+  border: 1px solid var(--line); color: var(--ink-2); background: var(--bg);
+}
+.chip-tog.on { background: var(--blue-tint); border-color: transparent; color: var(--blue-press); font-weight: 500; }
+
+/* settings list */
+.settings { position: absolute; inset: 22px 0 0 0; z-index: 36; background: var(--bg); overflow: hidden; }
+.appbar {
+  display: flex; align-items: center; gap: 16px; height: 52px; padding: 0 14px;
+  font-size: 16px; font-weight: 500;
+}
+.group-label {
+  font-size: 11px; font-weight: 500; color: var(--blue); letter-spacing: .04em;
+  padding: 16px 16px 6px;
+}
+.li { padding: 10px 16px; display: flex; align-items: center; gap: 12px; }
+.li + .li { border-top: 1px solid var(--bg-3); }
+.li .k { font-size: 13px; }
+.li .v { font-size: 12px; color: var(--ink-2); margin-top: 1px; }
+.li .val {
+  margin-left: auto; font-size: 12px; color: var(--ink-2);
+  font-family: "Roboto Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums; flex: none;
+}
+.warnbox {
+  margin: 10px 16px 0; padding: 10px 12px; border-radius: 8px;
+  background: #fef7e0; color: #8a6116; font-size: 11px; line-height: 1.5;
+}
+
+/* GPX / course pill on map */
+.pill-course {
+  position: absolute; left: 12px; z-index: 30;
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 32px; padding: 0 13px; border-radius: 16px;
+  background: var(--bg); box-shadow: var(--e1); font-size: 11.5px; font-weight: 500;
+}
+
+/* ---------- comparison + notes ---------- */
+
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 12px; font-weight: 500; color: var(--ink-3); letter-spacing: .04em; text-transform: uppercase; }
+td.was { color: var(--ink-2); }
+td code, p code, li code {
+  font-family: "Roboto Mono", ui-monospace, monospace; font-size: 12.5px;
+  background: var(--bg-3); padding: 1px 5px; border-radius: 4px;
+}
+.table-scroll { overflow-x: auto; }
+
+.notes { max-width: 68ch; }
+.notes p { margin: 0 0 14px; }
+.notes ul { margin: 0 0 14px; padding-left: 20px; }
+.notes li { margin-bottom: 7px; }
+.notes strong { font-weight: 500; }
+
+.callout {
+  border-left: 3px solid var(--amber); background: #fef7e0;
+  padding: 14px 16px; border-radius: 0 8px 8px 0; margin: 0 0 16px;
+  font-size: 14px; color: #6b4d10; max-width: 68ch;
+}
+.callout strong { font-weight: 500; }
+
+@media (max-width: 560px) {
+  .wrap { padding-block: 32px 56px; }
+  h1 { font-size: 27px; }
+  .screens { grid-template-columns: 1fr; justify-items: start; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc-head">
+  <p class="eyebrow">KoveDash · 画面設計 V2</p>
+  <h1>Google マップ準拠のスマホ画面</h1>
+  <p class="lede">
+    レトロ・ラリー調（ネオン色・ピクセルフォント・スキャンライン・スポンサー帯）を廃し、
+    Google マップと同じ色・書体・操作構造に置き換える案。配色だけでなく
+    <strong>情報の置き場所</strong>を変えるのが主眼で、地図を全面に敷き、検索を浮かせ、
+    操作をボトムシートへ集約する。
+  </p>
+  <div class="scope">
+    <span class="on">対象：スマホ側</span>
+    <span>対象外：ダッシュ HUD（圧縮耐性と視認距離が優先）</span>
+    <span>ライト基調</span>
+  </div>
+</header>
+
+<section>
+  <h2>1 · 配色</h2>
+  <div class="tokens">
+    <div class="swatch"><div class="chip" style="background:#1a73e8"></div><div class="meta">
+      <div class="name">Blue</div><div class="hex">#1A73E8</div><div class="role">主色・操作可能なもの全般</div></div></div>
+    <div class="swatch"><div class="chip" style="background:#e8f0fe"></div><div class="meta">
+      <div class="name">Blue tint</div><div class="hex">#E8F0FE</div><div class="role">選択状態・トーナルボタン</div></div></div>
+    <div class="swatch"><div class="chip" style="background:#202124"></div><div class="meta">
+      <div class="name">Ink</div><div class="hex">#202124</div><div class="role">本文</div></div></div>
+    <div class="swatch"><div class="chip" style="background:#5f6368"></div><div class="meta">
+      <div class="name">Ink 2</div><div class="hex">#5F6368</div><div class="role">補足・副情報</div></div></div>
+    <div class="swatch"><div class="chip" style="background:#dadce0"></div><div class="meta">
+      <div class="name">Line</div><div class="hex">#DADCE0</div><div class="role">境界・区切り</div></div></div>
+    <div class="swatch"><div class="chip" style="background:#f8f9fa"></div><div class="meta">
+      <div class="name">Surface 2</div><div class="hex">#F8F9FA</div><div class="role">地の面</div></div></div>
+    <div class="swatch"><div class="chip" style="background:#188038"></div><div class="meta">
+      <div class="name">Green</div><div class="hex">#188038</div><div class="role">接続済み</div></div></div>
+    <div class="swatch"><div class="chip" style="background:#f9ab00"></div><div class="meta">
+      <div class="name">Amber</div><div class="hex">#F9AB00</div><div class="role">接続作業中・注意</div></div></div>
+    <div class="swatch"><div class="chip" style="background:#d93025"></div><div class="meta">
+      <div class="name">Red</div><div class="hex">#D93025</div><div class="role">投影中・エラー・切断</div></div></div>
+  </div>
+  <p class="notes" style="margin-top:16px;color:var(--ink-2);font-size:14px">
+    状態色（緑・橙・赤）は主色とは別の役割を持つ。青は「押せるもの」だけに使い、
+    状態の表現には使わない。現在の設計ではミント・マゼンタ・イエローが
+    装飾と状態表示を兼ねていて、色が何を意味するのか読み取れない。
+  </p>
+</section>
+
+<section>
+  <h2>2 · 書体</h2>
+  <div class="type-spec">
+    <div class="type-row"><div class="k">Display / 24px 500</div>
+      <div style="font-size:24px;font-weight:500">ルートを選択</div></div>
+    <div class="type-row"><div class="k">Title / 16px 500</div>
+      <div style="font-size:16px;font-weight:500">ダッシュに接続済み</div></div>
+    <div class="type-row"><div class="k">Body / 14px 400</div>
+      <div style="font-size:14px">ウィジェットを BLE で送信中・映像はオフ</div></div>
+    <div class="type-row"><div class="k">Caption / 12px 400</div>
+      <div style="font-size:12px;color:var(--ink-2)">東京都練馬区春日町4丁目</div></div>
+    <div class="type-row"><div class="k">Label / 11px 500</div>
+      <div style="font-size:11px;font-weight:500;letter-spacing:.04em;color:var(--blue)">接続</div></div>
+    <div class="type-row"><div class="k">Mono / 12px 400</div>
+      <div style="font-family:'Roboto Mono',monospace;font-size:12px">192.168.10.1 · SV 3.0.4</div></div>
+  </div>
+  <p class="notes" style="margin-top:16px;color:var(--ink-2);font-size:14px">
+    Roboto 一本。等幅は診断画面の値（IP・MAC・ファーム）だけに使い、数字が縦に並ぶ箇所は
+    <code>tabular-nums</code> を効かせる。Press Start 2P・VT323・Bungee・Bowlby One・
+    Saira Stencil One は全廃。
+  </p>
+</section>
+
+<section>
+  <h2>3 · 画面</h2>
+  <div class="screens">
+
+    <!-- ============ 1. 未接続 ============ -->
+    <figure class="screen" style="margin:0">
+      <div class="phone">
+        <div class="map">
+          <svg viewBox="0 0 320 640" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+            <rect width="320" height="640" fill="#f3f1ec"/>
+            <rect x="196" y="330" width="78" height="54" rx="4" fill="#d7e8cf"/>
+            <rect x="24" y="150" width="62" height="40" rx="4" fill="#d7e8cf"/>
+            <g stroke="#e3dfd6" stroke-width="15" fill="none" stroke-linecap="round">
+              <path d="M-10 250 L340 210"/><path d="M-10 430 L340 400"/>
+              <path d="M120 -10 L150 660"/><path d="M250 -10 L268 660"/>
+            </g>
+            <g stroke="#ffffff" stroke-width="11" fill="none" stroke-linecap="round">
+              <path d="M-10 250 L340 210"/><path d="M-10 430 L340 400"/>
+              <path d="M120 -10 L150 660"/><path d="M250 -10 L268 660"/>
+            </g>
+            <g stroke="#ffffff" stroke-width="5" fill="none" opacity=".95">
+              <path d="M-10 330 L340 305"/><path d="M-10 520 L340 495"/>
+              <path d="M60 -10 L72 660"/><path d="M190 -10 L206 660"/>
+            </g>
+            <g fill="#9aa0a6" font-family="Roboto, sans-serif" font-size="8.5">
+              <text x="30" y="240">国道0号線</text>
+              <text x="205" y="325">春日町</text>
+              <text x="36" y="176">向山公園</text>
+            </g>
+            <circle cx="160" cy="352" r="9" fill="#1a73e8" opacity=".18"/>
+            <circle cx="160" cy="352" r="6" fill="#1a73e8" stroke="#fff" stroke-width="2.5"/>
+          </svg>
+        </div>
+
+        <div class="statusbar on-map"><span>0:38</span><span>4G ▲ 21%</span></div>
+
+        <div class="searchbar">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+          <span class="q">どこへ行く？</span>
+          <span class="avatar">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M22 12h-3M5 12H2M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1M18.4 18.4l-2.1-2.1M7.7 7.7L5.6 5.6"/></svg>
+          </span>
+        </div>
+
+        <div class="rail" style="top:92px">
+          <span class="fab" title="地図の種類">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></svg>
+          </span>
+          <span class="fab" title="GPX コース">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2" stroke-linecap="round"><path d="M4 19c4-1 3-7 7-8s6-5 9-6"/><circle cx="4.5" cy="19" r="1.6" fill="#5f6368"/><circle cx="19.5" cy="5" r="1.6" fill="#5f6368"/></svg>
+          </span>
+        </div>
+        <div class="rail" style="bottom:148px">
+          <span class="fab lg" title="現在地">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="#1a73e8"><path d="M12 2l7 19-7-4-7 4z"/></svg>
+          </span>
+        </div>
+
+        <div class="sheet">
+          <div class="grabber"></div>
+          <div class="sheet-row">
+            <span class="dot idle"></span>
+            <div style="flex:1;min-width:0">
+              <h3>ダッシュ未接続</h3>
+              <div class="sub">K450 Rally · 前回 00:16 に接続</div>
+            </div>
+          </div>
+          <div class="btn-row"><span class="btn filled block">接続</span></div>
+        </div>
+      </div>
+      <figcaption>
+        <div class="cap-title">地図（未接続）</div>
+        <div class="cap-note">
+          ブランド帯と 6 段のフェーズ表示を捨て、地図が画面の大半を占める。
+          接続は 1 ボタンに畳み、詳細は展開して見る。
+        </div>
+      </figcaption>
+    </figure>
+
+    <!-- ============ 2. 接続中 ============ -->
+    <figure class="screen" style="margin:0">
+      <div class="phone">
+        <div class="map">
+          <svg viewBox="0 0 320 640" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+            <rect width="320" height="640" fill="#f3f1ec"/>
+            <rect x="196" y="330" width="78" height="54" rx="4" fill="#d7e8cf"/>
+            <g stroke="#e3dfd6" stroke-width="15" fill="none" stroke-linecap="round">
+              <path d="M-10 250 L340 210"/><path d="M-10 430 L340 400"/><path d="M120 -10 L150 660"/>
+            </g>
+            <g stroke="#ffffff" stroke-width="11" fill="none" stroke-linecap="round">
+              <path d="M-10 250 L340 210"/><path d="M-10 430 L340 400"/><path d="M120 -10 L150 660"/>
+            </g>
+            <circle cx="160" cy="352" r="9" fill="#1a73e8" opacity=".18"/>
+            <circle cx="160" cy="352" r="6" fill="#1a73e8" stroke="#fff" stroke-width="2.5"/>
+          </svg>
+        </div>
+        <div class="statusbar on-map"><span>0:38</span><span>4G ▲ 21%</span></div>
+
+        <div class="searchbar">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+          <span class="q">どこへ行く？</span>
+          <span class="avatar">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M22 12h-3M5 12H2"/></svg>
+          </span>
+        </div>
+
+        <div class="sheet">
+          <div class="grabber"></div>
+          <div class="sheet-row">
+            <span class="dot work"></span>
+            <div style="flex:1;min-width:0">
+              <h3>接続中</h3>
+              <div class="sub">BLE ハンドシェイク · 3/6</div>
+            </div>
+            <span class="btn text">キャンセル</span>
+          </div>
+          <div class="progress"><i style="width:50%"></i></div>
+        </div>
+      </div>
+      <figcaption>
+        <div class="cap-title">接続中</div>
+        <div class="cap-note">
+          6 段のフェーズは畳んで「3/6」と細い進捗バーに。段階名は残すが、
+          <code>PacenoteRow</code> の積み上げ表示はやめる。
+        </div>
+      </figcaption>
+    </figure>
+
+    <!-- ============ 3. 接続済み ============ -->
+    <figure class="screen" style="margin:0">
+      <div class="phone">
+        <div class="map">
+          <svg viewBox="0 0 320 640" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+            <rect width="320" height="640" fill="#f3f1ec"/>
+            <rect x="196" y="330" width="78" height="54" rx="4" fill="#d7e8cf"/>
+            <g stroke="#e3dfd6" stroke-width="15" fill="none" stroke-linecap="round">
+              <path d="M-10 250 L340 210"/><path d="M-10 430 L340 400"/><path d="M120 -10 L150 660"/>
+            </g>
+            <g stroke="#ffffff" stroke-width="11" fill="none" stroke-linecap="round">
+              <path d="M-10 250 L340 210"/><path d="M-10 430 L340 400"/><path d="M120 -10 L150 660"/>
+            </g>
+            <circle cx="160" cy="352" r="9" fill="#1a73e8" opacity=".18"/>
+            <circle cx="160" cy="352" r="6" fill="#1a73e8" stroke="#fff" stroke-width="2.5"/>
+          </svg>
+        </div>
+        <div class="statusbar on-map"><span>0:38</span><span>4G ▲ 21%</span></div>
+
+        <div class="searchbar">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+          <span class="q">どこへ行く？</span>
+          <span class="avatar">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M22 12h-3M5 12H2"/></svg>
+          </span>
+        </div>
+
+        <span class="pill-course" style="top:92px">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#188038" stroke-width="2.4" stroke-linecap="round"><path d="M4 19c4-1 3-7 7-8s6-5 9-6"/></svg>
+          奥多摩林道.gpx
+        </span>
+
+        <div class="sheet">
+          <div class="grabber"></div>
+          <div class="sheet-row">
+            <span class="dot ok"></span>
+            <div style="flex:1;min-width:0">
+              <h3>接続済み</h3>
+              <div class="sub">ウィジェットを BLE で送信中 · 映像オフ</div>
+            </div>
+          </div>
+          <div class="btn-row">
+            <span class="btn tonal" style="flex:1">画面を投影</span>
+            <span class="btn outline">切断</span>
+          </div>
+        </div>
+      </div>
+      <figcaption>
+        <div class="cap-title">接続済み</div>
+        <div class="cap-note">
+          主たる操作は「投影」なのでトーナル、「切断」は退避的なのでアウトライン。
+          読み込み済み GPX は地図上のチップに出す。
+        </div>
+      </figcaption>
+    </figure>
+
+    <!-- ============ 4. 検索 ============ -->
+    <figure class="screen" style="margin:0">
+      <div class="phone">
+        <div class="statusbar"><span>0:38</span><span>4G ▲ 21%</span></div>
+        <div class="sheet-full">
+          <div class="search-head">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2" stroke-linecap="round"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>
+            <span style="flex:1;font-size:13.5px">渋谷</span>
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </div>
+          <div class="result">
+            <span class="ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2"><path d="M12 21s7-6.2 7-11a7 7 0 10-14 0c0 4.8 7 11 7 11z"/><circle cx="12" cy="10" r="2.4"/></svg></span>
+            <span><span class="name">渋谷スクランブル交差点</span><br><span class="ctx">東京都渋谷区道玄坂</span></span>
+            <span class="dist">18 km</span>
+          </div>
+          <div class="result">
+            <span class="ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2"><rect x="5" y="3" width="14" height="13" rx="2"/><path d="M7 20l2-4M17 20l-2-4"/></svg></span>
+            <span><span class="name">渋谷駅</span><br><span class="ctx">東京都渋谷区渋谷2丁目</span></span>
+            <span class="dist">18 km</span>
+          </div>
+          <div class="result">
+            <span class="ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2"><path d="M4 8h16v11H4zM4 8l2-4h12l2 4"/></svg></span>
+            <span><span class="name">セブン-イレブン 渋谷桜丘店</span><br><span class="ctx">東京都渋谷区桜丘町</span></span>
+            <span class="dist">18 km</span>
+          </div>
+          <div class="result">
+            <span class="ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>
+            <span><span class="name">渋谷区役所</span><br><span class="ctx">東京都渋谷区宇田川町</span></span>
+            <span class="dist">19 km</span>
+          </div>
+        </div>
+      </div>
+      <figcaption>
+        <div class="cap-title">目的地の検索</div>
+        <div class="cap-note">
+          全画面・白地。1 行 = 円アイコン＋名称＋所在地＋距離で、
+          種別が一目で分かる。現在の <code>featureTypeGlyph</code> の
+          記号はマテリアルのアイコンに置き換える。
+        </div>
+      </figcaption>
+    </figure>
+
+    <!-- ============ 5. ルート候補 ============ -->
+    <figure class="screen" style="margin:0">
+      <div class="phone">
+        <div class="map">
+          <svg viewBox="0 0 320 640" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+            <rect width="320" height="640" fill="#f3f1ec"/>
+            <g stroke="#e3dfd6" stroke-width="14" fill="none" stroke-linecap="round">
+              <path d="M-10 230 L340 200"/><path d="M130 -10 L152 500"/>
+            </g>
+            <g stroke="#ffffff" stroke-width="10" fill="none" stroke-linecap="round">
+              <path d="M-10 230 L340 200"/><path d="M130 -10 L152 500"/>
+            </g>
+            <path d="M60 400 C 90 300, 130 280, 150 200 S 210 120, 255 96"
+                  stroke="#9aa0a6" stroke-width="7" fill="none" stroke-linecap="round" opacity=".55"/>
+            <path d="M60 400 C 110 360, 120 250, 175 215 S 220 130, 255 96"
+                  stroke="#9aa0a6" stroke-width="7" fill="none" stroke-linecap="round" opacity=".55"/>
+            <path d="M60 400 C 80 330, 128 300, 148 230 S 205 128, 255 96"
+                  stroke="#1a73e8" stroke-width="8" fill="none" stroke-linecap="round"/>
+            <circle cx="60" cy="400" r="7" fill="#1a73e8" stroke="#fff" stroke-width="2.5"/>
+            <path d="M255 76 c7 0 12 5 12 12 0 9-12 20-12 20s-12-11-12-20c0-7 5-12 12-12z" fill="#d93025" stroke="#fff" stroke-width="2"/>
+          </svg>
+        </div>
+        <div class="statusbar on-map"><span>0:38</span><span>4G ▲ 21%</span></div>
+
+        <div class="searchbar">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2" stroke-linecap="round"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>
+          <span class="q filled">渋谷スクランブル交差点</span>
+        </div>
+
+        <div class="sheet">
+          <div class="grabber"></div>
+          <div class="route sel">
+            <div><div class="time">26 分</div><div class="via">9.9 km · 国道0号線経由</div></div>
+            <span class="badge">最速</span>
+          </div>
+          <div class="route">
+            <div><div class="time">31 分</div><div class="via">11.2 km · 〇〇通り経由</div></div>
+            <span class="badge">渋滞少</span>
+          </div>
+          <div class="route">
+            <div><div class="time">35 分</div><div class="via">10.4 km · 甲州街道経由</div></div>
+          </div>
+          <div class="chips">
+            <span class="chip-tog on">高速を避ける</span>
+            <span class="chip-tog">有料道路</span>
+            <span class="chip-tog">フェリー</span>
+          </div>
+          <div class="btn-row"><span class="btn filled block">開始</span></div>
+        </div>
+      </div>
+      <figcaption>
+        <div class="cap-title">ルート候補</div>
+        <div class="cap-note">
+          所要時間を主・距離を副にする（今は距離が主）。選択中は青地。
+          回避条件はトグルチップで、押した瞬間に再計算。
+        </div>
+      </figcaption>
+    </figure>
+
+    <!-- ============ 6. 設定 ============ -->
+    <figure class="screen" style="margin:0">
+      <div class="phone">
+        <div class="statusbar"><span>0:38</span><span>4G ▲ 21%</span></div>
+        <div class="settings">
+          <div class="appbar">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#202124" stroke-width="2" stroke-linecap="round"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>
+            設定
+          </div>
+          <div class="group-label">接続</div>
+          <div class="li"><div><div class="k">ダッシュ AP の SSID</div><div class="v">CQKY_</div></div></div>
+          <div class="li"><div><div class="k">AP パスワード</div><div class="v">ダッシュを初期化すると変わります</div></div></div>
+          <div class="group-label">端末情報</div>
+          <div class="li"><div class="k">ゲートウェイ</div><span class="val">192.168.10.1</span></div>
+          <div class="li"><div class="k">ファームウェア</div><span class="val">SV 3.0.4</span></div>
+          <div class="li"><div class="k">MAC アドレス</div><span class="val">A4:C1:38:··</span></div>
+          <div class="li"><div class="k">バッテリー</div><span class="val">21%</span></div>
+          <div class="group-label">診断</div>
+          <div class="warnbox">
+            BLE が混雑し、ダッシュのターン矢印が一時的に止まります。
+            走行中は実行しないでください。
+          </div>
+          <div style="padding:12px 16px">
+            <span class="btn outline block">機能を検出</span>
+          </div>
+          <div class="li"><div class="k">GPS</div><span class="val">signal_status:1</span></div>
+          <div class="li"><div class="k">THEME</div><span class="val">act:2</span></div>
+          <div class="li"><div class="k">MUSIC</div><span class="val" style="color:var(--ink-3)">応答なし</span></div>
+        </div>
+      </div>
+      <figcaption>
+        <div class="cap-title">設定</div>
+        <div class="cap-note">
+          マテリアルのリスト。<code>§00</code> 番号付き見出しはやめ、
+          区分ラベルに。値は等幅で右揃え。
+        </div>
+      </figcaption>
+    </figure>
+
+  </div>
+</section>
+
+<section>
+  <h2>4 · 何がどう変わるか</h2>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th style="width:26%">要素</th><th style="width:34%">現在</th><th>V2</th></tr></thead>
+      <tbody>
+        <tr><td>画面上部</td><td class="was">スポンサー帯＋ブランド帯＋ステータス丸＋ピル＋区切り線（約 120dp）</td>
+            <td>地図に浮かぶ検索バー 1 本。ブランド表示なし</td></tr>
+        <tr><td>接続の段階</td><td class="was"><code>PhaseStrip</code> が縦に伸び、ペースノート行が積まれる</td>
+            <td>シート内に「3/6」＋進捗バー。段階名は 1 行</td></tr>
+        <tr><td>操作ボタン</td><td class="was">画面下に <code>BeveledButton</code> を縦積み（斜め影つき）</td>
+            <td>ボトムシート内のマテリアルボタン。主操作は 1 つ</td></tr>
+        <tr><td>地図の面積</td><td class="was">上下に挟まれて中央の帯のみ</td>
+            <td>全面。シートは下端にかぶせる</td></tr>
+        <tr><td>地図の種類 / GPX</td><td class="was">地図上の角丸ボタン 2 つ（<code>NAV 3D</code> / <code>LOAD GPX</code>）</td>
+            <td>右側の FAB 列に。読み込み済み GPX は左上のチップ</td></tr>
+        <tr><td>目的地バー</td><td class="was">地図の下に固定、<code>GO</code> の記号つき</td>
+            <td>上部の検索バーに統合（Google マップと同じ位置）</td></tr>
+        <tr><td>ルート候補</td><td class="was">距離が主、回避条件は角ばったチップ</td>
+            <td>所要時間が主。選択中は青地のカード</td></tr>
+        <tr><td>設定</td><td class="was"><code>§00</code>〜<code>§02</code> の番号見出し、ピクセルフォント</td>
+            <td>マテリアルのリスト＋区分ラベル</td></tr>
+        <tr><td>削除する部品</td><td class="was" colspan="2">
+            <code>SponsorBand</code> / <code>ScanlineOverlay</code> / <code>BeveledButton</code> /
+            <code>PositionPill</code> / <code>PacenoteRow</code> / <code>StageBar</code> /
+            <code>SectionHeader</code> と、Press Start 2P・VT323・Bungee・Bungee Inline・
+            Bowlby One・Saira Stencil One の 6 書体</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>5 · 決めておきたいこと</h2>
+
+  <div class="callout">
+    <strong>UI 文言の日本語化は別の変更です。</strong>
+    このモックアップは日本語で書いているが、現在のアプリの文字列は英語
+    （<code>Where to?</code> / <code>CONNECT</code> / <code>PRESS ENGAGE TO START</code>）。
+    見た目の作り直しと文言の翻訳は独立して進められるので、英語のまま配色だけ
+    変えることもできる。地図ラベルを日本語化した流れからすると揃えたいが、判断は分けたい。
+  </div>
+
+  <div class="notes">
+    <p><strong>上流との乖離が増えます。</strong>
+      この変更は <code>ui/</code> 以下をほぼ全面的に書き換えるため、
+      <code>ttarlov/kove-dash</code> が UI を触るたびに競合する。
+      メートル法固定で受け入れたのと同じ種類のコストだが、規模はこちらの方が大きい。
+      矢印コードのようなプロトコル層の修正（<code>navshare/</code>・<code>proto/</code>・
+      <code>service/</code>）は影響を受けないので、取り込みは今まで通りできる。</p>
+
+    <p><strong>ダッシュ HUD は現状維持にしています。</strong>
+      <code>ManeuverBanner</code> / <code>TurnArrow</code> / <code>DashTripHud</code> は
+      1280×640 に H.264 で焼かれ、走行中に一瞥する。白地に細い文字は圧縮で潰れやすく、
+      現在の「黒の半透明パネルに白文字＋影」は合理的な選択。ここを触るなら実機検証が要る。</p>
+
+    <p><strong>明るい地図は昼夜で印象が変わります。</strong>
+      ライト基調はバイクの屋外使用では見やすいが、夜間のトンネルや日没後はまぶしい。
+      Google マップと同じく、<em>端末のダークモードに追随して自動で暗い配色へ切り替える</em>
+      のを次の段階として想定している（今回のトークンはその切り替えを前提に組んである）。</p>
+  </div>
+</section>
+
+</div>
+</body>
+</html>
