@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>KoveDash Rally Screen</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=VT323&family=Press+Start+2P&family=Noto+Sans+JP:wght@400;700&display=swap" rel="stylesheet" />
+<style>
+/* Palette = app/.../ui/theme/KoveColors.kt, so the projected screen matches the nav HUD. */
+:root {
+  --void: #0A0A14;
+  --void2: #14142A;
+  --mint: #02D49E;
+  --mint-bright: #3DF0B8;
+  --sky: #95DBFF;
+  --magenta: #DC1283;
+  --yellow: #F8EE6A;
+  --paper: #F5EFE0;
+  --white: #FFFFFF;
+  --hair: rgba(149, 219, 255, .26);
+  --hair2: rgba(149, 219, 255, .14);
+  --label: "Press Start 2P", monospace;
+  --num: "VT323", monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #05050b;
+  color: var(--paper);
+  font-family: "Noto Sans JP", sans-serif;
+  min-height: 100vh;
+  padding: 24px 16px 48px;
+}
+.page { max-width: 1280px; margin: 0 auto; }
+h1 { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+.sub { font-size: 13px; color: #9aa0b8; margin-bottom: 16px; }
+
+/* ---------- Dash canvas: exactly the 1280×640 projection frame, scaled to fit ---------- */
+.stage { width: 100%; position: relative; }
+.dash {
+  width: 1280px; height: 640px;
+  transform-origin: top left;
+  background: var(--void);
+  position: absolute; top: 0; left: 0;
+  display: grid;
+  grid-template-columns: 740px 1fr;
+  grid-template-rows: 1fr 196px;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 6px;
+  outline: 1px solid #22223a;
+  overflow: hidden;
+}
+.panel {
+  background: var(--void2);
+  border: 2px solid var(--hair);
+  border-radius: 4px;
+  position: relative;
+  overflow: hidden;
+}
+.lbl {
+  font-family: var(--label);
+  font-size: 22px;
+  color: var(--sky);
+  letter-spacing: 1px;
+}
+.num {
+  font-family: var(--num);
+  font-variant-numeric: tabular-nums;
+  line-height: .82;
+  color: var(--white);
+}
+.unit { font-family: var(--label); font-size: 20px; color: var(--sky); }
+
+/* ODO */
+.odo { padding: 22px 28px; display: flex; flex-direction: column; }
+.odo-head { display: flex; justify-content: space-between; align-items: center; }
+.odo-main { flex: 1; display: flex; align-items: flex-end; justify-content: flex-end; gap: 14px; padding-bottom: 6px; }
+.odo-main .num { font-size: 300px; color: var(--yellow); transition: color .15s; }
+.odo-main .num.flash { color: var(--white); }
+.odo-main .unit { margin-bottom: 26px; }
+.odo-foot {
+  border-top: 2px solid var(--hair2);
+  padding-top: 14px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.part { display: flex; align-items: baseline; gap: 16px; }
+.part .num { font-size: 72px; }
+.adj {
+  font-family: var(--label); font-size: 18px;
+  color: var(--void); background: var(--mint);
+  padding: 8px 12px; border-radius: 3px;
+  opacity: 0; transition: opacity .2s;
+}
+.adj.show { opacity: 1; }
+.adj.neg { background: var(--magenta); color: var(--white); }
+.gps { font-family: var(--label); font-size: 16px; color: var(--mint); display: flex; align-items: center; gap: 10px; }
+.gps i { width: 14px; height: 14px; border-radius: 50%; background: var(--mint); display: inline-block; }
+.gps.lost { color: var(--magenta); }
+.gps.lost i { background: var(--magenta); animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+
+/* CAP */
+.cap { padding: 22px 24px; display: flex; flex-direction: column; }
+.cap-head { display: flex; justify-content: space-between; align-items: center; }
+.cardinal { font-family: var(--label); font-size: 30px; color: var(--mint-bright); }
+.cap-main { flex: 1; display: flex; align-items: center; justify-content: center; }
+.cap-main .num { font-size: 230px; }
+.cap-main .deg { width: 30px; height: 30px; border: 7px solid var(--sky); border-radius: 50%; align-self: flex-start; margin: 34px 0 0 10px; }
+.cap.stale .cap-main .num { color: #5a5a78; }
+.tape {
+  height: 78px; position: relative; overflow: hidden;
+  border-top: 2px solid var(--hair2);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
+          mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
+}
+.tape-strip { position: absolute; top: 0; left: 0; height: 100%; will-change: transform; }
+.tick { position: absolute; top: 0; width: 2px; background: var(--hair); }
+.tick.major { background: var(--sky); height: 26px; }
+.tick.minor { height: 14px; }
+.tick-lbl {
+  position: absolute; top: 34px; transform: translateX(-50%);
+  font-family: var(--label); font-size: 18px; color: var(--sky);
+}
+.tick-lbl.card { color: var(--yellow); }
+.tape-mark {
+  position: absolute; left: 50%; top: 0; transform: translateX(-50%);
+  width: 0; height: 0;
+  border-left: 14px solid transparent; border-right: 14px solid transparent;
+  border-top: 20px solid var(--magenta);
+}
+
+/* Bottom tiles */
+.tiles { grid-column: 1 / -1; display: grid; grid-template-columns: 230px 220px 320px 220px 1fr; gap: 12px; }
+.tile { padding: 18px 20px; display: flex; flex-direction: column; justify-content: space-between; }
+.tile-head { display: flex; justify-content: space-between; align-items: baseline; }
+.tile .val { display: flex; align-items: baseline; gap: 8px; }
+.tile .num { font-size: 100px; }
+#time { font-size: 94px; }
+.tile .unit { font-size: 16px; }
+.alt-trend { font-family: var(--num); font-size: 44px; color: var(--mint); }
+.wx .val { gap: 14px; align-items: center; }
+.wx svg { width: 56px; height: 56px; flex: none; }
+.wx .wind { font-family: var(--label); font-size: 15px; color: var(--sky); margin-top: 6px; }
+
+/* ---------- Controls (simulated handlebar remote) & notes, outside the dash frame ---------- */
+.controls { margin-top: 20px; display: flex; flex-wrap: wrap; gap: 8px; }
+.controls button {
+  font: 700 14px "Noto Sans JP", sans-serif;
+  background: #1b1b30; color: var(--paper);
+  border: 1px solid #34345a; border-radius: 8px;
+  padding: 10px 14px; cursor: pointer;
+}
+.controls button:hover { background: #26264a; }
+.controls button.on { background: var(--magenta); border-color: var(--magenta); }
+.hint { font-size: 12px; color: #8a90a8; margin-top: 8px; }
+.notes { margin-top: 28px; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.note { background: #11111f; border: 1px solid #25253d; border-radius: 10px; padding: 14px 16px; font-size: 13px; line-height: 1.7; }
+.note h2 { font-size: 14px; margin-bottom: 6px; color: var(--sky); }
+.note ul { padding-left: 18px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>ラリー画面（Wi-Fi 投影）モックアップ</h1>
+  <p class="sub">1280×640 の投影フレームそのままのサイズ。コマ図は紙、メーターはこの画面で。値はシミュレーション。</p>
+
+  <div class="stage" id="stage">
+    <div class="dash" id="dash">
+      <!-- ODO -->
+      <section class="panel odo">
+        <div class="odo-head">
+          <span class="lbl">ODO</span>
+          <span class="gps" id="gps"><i></i><span id="gpsText">GPS 3D</span></span>
+        </div>
+        <div class="odo-main">
+          <span class="num" id="odo">0.00</span>
+          <span class="unit">km</span>
+        </div>
+        <div class="odo-foot">
+          <div class="part">
+            <span class="lbl">PART</span>
+            <span class="num" id="part">0.00</span>
+            <span class="unit">km</span>
+          </div>
+          <span class="adj" id="adj">+0.01</span>
+        </div>
+      </section>
+
+      <!-- CAP -->
+      <section class="panel cap" id="capPanel">
+        <div class="cap-head">
+          <span class="lbl">CAP</span>
+          <span class="cardinal" id="cardinal">SW</span>
+        </div>
+        <div class="cap-main">
+          <span class="num" id="cap">245</span><span class="deg" aria-label="度"></span>
+        </div>
+        <div class="tape">
+          <div class="tape-strip" id="strip"></div>
+          <div class="tape-mark"></div>
+        </div>
+      </section>
+
+      <!-- Bottom row -->
+      <div class="tiles">
+        <section class="panel tile">
+          <div class="tile-head"><span class="lbl">SPEED</span><span class="unit">km/h</span></div>
+          <div class="val"><span class="num" id="spd">0</span></div>
+        </section>
+        <section class="panel tile">
+          <div class="tile-head"><span class="lbl">AVG</span><span class="unit">km/h</span></div>
+          <div class="val"><span class="num" id="avg">0.0</span></div>
+        </section>
+        <section class="panel tile">
+          <span class="lbl">TIME</span>
+          <div class="val"><span class="num" id="time">0:00:00</span></div>
+        </section>
+        <section class="panel tile">
+          <div class="tile-head"><span class="lbl">ALT</span><span class="unit">m</span></div>
+          <div class="val"><span class="num" id="alt">0</span><span class="alt-trend" id="altTrend">▲</span></div>
+        </section>
+        <section class="panel tile wx">
+          <span class="lbl">WEATHER</span>
+          <div>
+            <div class="val">
+              <svg viewBox="0 0 64 64" aria-hidden="true">
+                <circle cx="24" cy="24" r="11" fill="#F8EE6A"/>
+                <g stroke="#F8EE6A" stroke-width="4" stroke-linecap="round">
+                  <path d="M24 4v5M24 39v5M4 24h5M39 24h5M10 10l3.5 3.5M34.5 34.5L38 38M10 38l3.5-3.5M34.5 13.5L38 10"/>
+                </g>
+                <path d="M22 52h30a10 10 0 0 0 0-20 14 14 0 0 0-26 4 8 8 0 0 0-4 16z" fill="#F5EFE0"/>
+              </svg>
+              <span class="num" id="temp">18</span><span class="unit">℃</span>
+            </div>
+            <div class="wind">WIND 3 m/s</div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button id="plus">＋ ODO 補正 (+0.01)</button>
+    <button id="minus">− ODO 補正 (−0.01)</button>
+    <button id="resetPart">PART リセット</button>
+    <button id="resetAll">全リセット</button>
+    <button id="lose">GPS ロスト</button>
+    <button id="pause">一時停止</button>
+  </div>
+  <p class="hint">キーボード: ↑ / ↓ = ±0.01 km、R = PART リセット、Space = 一時停止（ハンドルのBluetoothリモコンを想定）</p>
+
+  <div class="notes">
+    <div class="note">
+      <h2>レイアウトの考え方</h2>
+      <ul>
+        <li>コマ図を読みながら一番見る ODO を左上に最大サイズ（300px）で配置</li>
+        <li>CAP は右上。度数の大きな数字＋コンパステープで向きを直感的に</li>
+        <li>下段は速度・平均・経過時間・標高・天気。走行中にチラ見する情報</li>
+        <li>ラベルは最小 22px 相当。5インチ TFT でも読める大きさ</li>
+      </ul>
+    </div>
+    <div class="note">
+      <h2>データの出どころ</h2>
+      <ul>
+        <li>ODO / PART / SPEED / AVG / CAP：スマホ GPS（CAP は低速時コンパス補完）</li>
+        <li>ALT：GPS 標高（BLE で送っているのと同じ値）</li>
+        <li>WEATHER：既存の WeatherSource（5分ごと）</li>
+        <li>AVG と TIME は停車中も加算（ラリーの区間平均の考え方）</li>
+      </ul>
+    </div>
+    <div class="note">
+      <h2>状態表示</h2>
+      <ul>
+        <li>ODO 補正時は数字が白く光り、補正量バッジが出る</li>
+        <li>GPS ロスト時は赤点滅、CAP はグレーで最後の値を保持</li>
+        <li>配色はナビ HUD（KoveColors）と共通</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const dash = $('dash'), stage = $('stage');
+
+  // Scale the fixed 1280×640 frame to the available width.
+  function fit() {
+    const s = Math.min(1, stage.clientWidth / 1280);
+    dash.style.transform = `scale(${s})`;
+    stage.style.height = (640 * s) + 'px';
+  }
+  addEventListener('resize', fit); fit();
+
+  // Compass tape: 6px per degree, ticks every 5°, labels every 30°.
+  const PX = 6, strip = $('strip');
+  const CARD = { 0: 'N', 45: 'NE', 90: 'E', 135: 'SE', 180: 'S', 225: 'SW', 270: 'W', 315: 'NW' };
+  let html = '';
+  for (let d = -360; d <= 720; d += 5) {
+    const x = (d + 360) * PX, n = ((d % 360) + 360) % 360;
+    const major = n % 15 === 0;
+    html += `<div class="tick ${major ? 'major' : 'minor'}" style="left:${x}px"></div>`;
+    if (n % 45 === 0) html += `<div class="tick-lbl card" style="left:${x}px">${CARD[n]}</div>`;
+    else if (n % 30 === 0) html += `<div class="tick-lbl" style="left:${x}px">${n}</div>`;
+  }
+  strip.innerHTML = html;
+  const tapeW = () => strip.parentElement.clientWidth;
+
+  const cardinal = d => ['N','NE','E','SE','S','SW','W','NW'][Math.round(d / 45) % 8];
+  const fmtTime = s => {
+    s = Math.floor(s);
+    return `${Math.floor(s / 3600)}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+  };
+
+  // Simulated ride state.
+  const st = { odo: 42.18, part: 3.62, spd: 58, cap: 245, capTarget: 245, alt: 1240, altPrev: 1240,
+               t: 3847, paused: false, gpsLost: false };
+  let last = performance.now(), adjTimer;
+
+  function adjust(delta) {
+    st.odo = Math.max(0, st.odo + delta);
+    st.part = Math.max(0, st.part + delta);
+    const adj = $('adj'), odo = $('odo');
+    adj.textContent = (delta > 0 ? '+' : '−') + Math.abs(delta).toFixed(2);
+    adj.classList.toggle('neg', delta < 0);
+    adj.classList.add('show'); odo.classList.add('flash');
+    clearTimeout(adjTimer);
+    adjTimer = setTimeout(() => { adj.classList.remove('show'); odo.classList.remove('flash'); }, 900);
+    render();
+  }
+
+  function render() {
+    $('odo').textContent = st.odo.toFixed(2);
+    $('part').textContent = st.part.toFixed(2);
+    $('spd').textContent = st.gpsLost ? '--' : Math.round(st.spd);
+    $('avg').textContent = (st.odo / (st.t / 3600)).toFixed(1);
+    $('time').textContent = fmtTime(st.t);
+    $('alt').textContent = Math.round(st.alt);
+    const dAlt = st.alt - st.altPrev;
+    $('altTrend').textContent = Math.abs(dAlt) < 0.05 ? '' : dAlt > 0 ? '▲' : '▼';
+    const c = ((Math.round(st.cap) % 360) + 360) % 360;
+    $('cap').textContent = String(c).padStart(3, '0');
+    $('cardinal').textContent = cardinal(c);
+    strip.style.transform = `translateX(${tapeW() / 2 - (st.cap + 360) * PX}px)`;
+    $('capPanel').classList.toggle('stale', st.gpsLost);
+    $('gps').classList.toggle('lost', st.gpsLost);
+    $('gpsText').textContent = st.gpsLost ? 'GPS LOST' : 'GPS 3D';
+  }
+
+  function tick(now) {
+    const dt = Math.min(0.1, (now - last) / 1000); last = now;
+    if (!st.paused) {
+      st.t += dt;
+      if (!st.gpsLost) {
+        st.spd += (Math.random() - 0.5) * 6 * dt + (60 - st.spd) * 0.05 * dt;
+        st.odo += st.spd * dt / 3600;
+        st.part += st.spd * dt / 3600;
+        if (Math.random() < dt * 0.25) st.capTarget = st.cap + (Math.random() - 0.5) * 70;
+        st.cap += (st.capTarget - st.cap) * Math.min(1, dt * 1.5);
+        if (st.cap > 360) { st.cap -= 360; st.capTarget -= 360; }
+        if (st.cap < 0) { st.cap += 360; st.capTarget += 360; }
+        st.altPrev = st.alt;
+        st.alt += Math.sin(now / 9000) * 2.2 * dt;
+      }
+    }
+    render();
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+
+  $('plus').onclick = () => adjust(0.01);
+  $('minus').onclick = () => adjust(-0.01);
+  $('resetPart').onclick = () => { st.part = 0; render(); };
+  $('resetAll').onclick = () => { st.odo = 0; st.part = 0; st.t = 0.001; render(); };
+  $('lose').onclick = e => { st.gpsLost = !st.gpsLost; e.target.classList.toggle('on', st.gpsLost); };
+  $('pause').onclick = e => { st.paused = !st.paused; e.target.classList.toggle('on', st.paused); };
+  addEventListener('keydown', e => {
+    if (e.key === 'ArrowUp') { e.preventDefault(); adjust(0.01); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); adjust(-0.01); }
+    else if (e.key === 'r' || e.key === 'R') $('resetPart').click();
+    else if (e.key === ' ') { e.preventDefault(); $('pause').click(); }
+  });
+})();
+</script>
+</body>
+</html>

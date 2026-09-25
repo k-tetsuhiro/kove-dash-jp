@@ -1,5 +1,5 @@
-// Modified by k-tetsuhiro for kove-dash-jp (2026): Maps-style phone UI;
-// map / rally dash screen toggle and rally controls.
+// Modified by k-tetsuhiro for kove-dash-jp (2026): Maps-style phone UI (design/v2-mockup.html);
+// map / rally dash screen toggle and rally controls (design/rally-switch-mockup.html).
 package com.kovedash.app.ui
 
 import androidx.compose.foundation.background

@@ -55,6 +55,3 @@ _private/
 
 # Claude Code session dirs / agent worktrees
 .claude/
-
-# --- design mockups (kept local, not published) ---
-design/
