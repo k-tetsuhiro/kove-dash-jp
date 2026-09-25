@@ -2,7 +2,6 @@
 package com.kovedash.app.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -80,7 +79,7 @@ import com.kovedash.app.ui.theme.AppFonts
  *
  * Landscape moves the chrome into a left side panel, as Maps does: a full-width sheet plus
  * the maneuver card ate half of a ~360dp-tall screen and couldn't be put away. The sheet also
- * collapses to one row in both orientations — on its own once the link is up, or by its grabber.
+ * collapses to one row in both orientations — on its own once the link is up, or by dragging it.
  */
 @Composable
 fun ConnectScreen(
@@ -317,7 +316,7 @@ private fun ConnectionSheet(
         onExpandedChange = onExpandedChange,
     ) {
         if (!expanded) {
-            CollapsedSheetRow(state, onExpand = { onExpandedChange(true) }, onConnect, onProject, onStopProjection, onDisconnect)
+            CollapsedSheetRow(state, onConnect, onProject, onStopProjection, onDisconnect)
             return@BottomSheet
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -389,13 +388,12 @@ private fun ConnectionSheet(
 }
 
 /**
- * The sheet folded to one row: state, and the single action that matters in it. Tapping the
- * text expands it back (as does the grabber); disconnect lives only in the expanded form.
+ * The sheet folded to one row: state, and the single action that matters in it. Drag the
+ * sheet up to expand it back; disconnect lives only in the expanded form.
  */
 @Composable
 private fun CollapsedSheetRow(
     state: DashState,
-    onExpand: () -> Unit,
     onConnect: () -> Unit,
     onProject: () -> Unit,
     onStopProjection: () -> Unit,
@@ -404,9 +402,7 @@ private fun CollapsedSheetRow(
     Row(verticalAlignment = Alignment.CenterVertically) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .weight(1f)
-                .clickable(onClickLabel = "ひろげる", onClick = onExpand),
+            modifier = Modifier.weight(1f),
         ) {
             StateDot(color = phaseColor(state.phase))
             Box(Modifier.width(12.dp))

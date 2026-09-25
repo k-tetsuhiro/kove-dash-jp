@@ -3,7 +3,11 @@ package com.kovedash.app.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animate
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,6 +24,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -27,7 +34,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -216,9 +227,12 @@ fun MapPill(
 /**
  * The bottom sheet the phone UI's controls live in. Rounded top, heavy shadow, grabber.
  *
- * With [expanded] set, the grabber is live: tap toggles, a downward drag collapses and an
- * upward drag expands, and the caller renders the compact form when [expanded] is false. With
- * it null (the default) the grabber is decorative and the content alone sizes the sheet.
+ * With [expanded] set, the whole sheet is draggable (not just the grabber, which is a
+ * visual cue): expanded, it follows the finger down and collapses when released past a
+ * threshold or flung; collapsed, an upward drag expands it as soon as it passes half that
+ * threshold, so the content grows under the finger. The caller renders the compact form when
+ * [expanded] is false; height changes animate. No tap toggle — taps belong to the buttons.
+ * With it null (the default) the sheet is static and the content alone sizes it.
  * [shape] lets a caller float the sheet as a card (landscape side panel) instead of docking it.
  */
 @Composable
@@ -229,35 +243,61 @@ fun BottomSheet(
     onExpandedChange: (Boolean) -> Unit = {},
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val drag = if (expanded == null) {
+        Modifier
+    } else {
+        val latest by rememberUpdatedState(expanded)
+        val thresholdPx = with(LocalDensity.current) { SHEET_DRAG_THRESHOLD.toPx() }
+        // Downward follow-the-finger offset while expanded; springs back to 0 on release.
+        var offset by remember { mutableFloatStateOf(0f) }
+        // Upward travel while collapsed; flips to expanded once it passes half the threshold.
+        var upTravel by remember { mutableFloatStateOf(0f) }
+        val dragState = rememberDraggableState { dy ->
+            if (latest) {
+                offset = (offset + dy).coerceAtLeast(0f)
+            } else {
+                upTravel = (upTravel + dy).coerceAtMost(0f)
+                if (upTravel < -thresholdPx / 2) {
+                    upTravel = 0f
+                    onExpandedChange(true)
+                }
+            }
+        }
+        Modifier
+            .semantics {
+                customActions = listOf(
+                    CustomAccessibilityAction(if (expanded) "たたむ" else "ひろげる") {
+                        onExpandedChange(!latest); true
+                    },
+                )
+            }
+            .draggable(
+                state = dragState,
+                orientation = Orientation.Vertical,
+                onDragStarted = { upTravel = 0f },
+                onDragStopped = { velocity ->
+                    if (latest && (offset > thresholdPx || velocity > SHEET_FLING_VELOCITY)) {
+                        onExpandedChange(false)
+                    } else if (!latest && velocity < -SHEET_FLING_VELOCITY) {
+                        onExpandedChange(true)
+                    }
+                    animate(offset, 0f) { v, _ -> offset = v }
+                },
+            )
+            .graphicsLayer { translationY = offset }
+    }
     Column(
         modifier = modifier
+            .then(drag)
             .fillMaxWidth()
             .shadow(12.dp, shape, clip = false)
             .clip(shape)
             .background(AppColors.Surface)
+            .animateContentSize()
             .padding(start = 16.dp, end = 16.dp, bottom = 18.dp),
     ) {
-        // The touch target is the full-width strip around the pill, not the 32×4dp pill itself.
-        val handleArea = if (expanded == null) {
-            Modifier
-        } else {
-            val latest by rememberUpdatedState(expanded)
-            Modifier
-                .clickable(onClickLabel = if (expanded) "たたむ" else "ひろげる") { onExpandedChange(!latest) }
-                .pointerInput(Unit) {
-                    var dragged = 0f
-                    detectVerticalDragGestures(
-                        onDragStart = { dragged = 0f },
-                        onVerticalDrag = { _, dy -> dragged += dy },
-                        onDragEnd = {
-                            if (dragged > HANDLE_DRAG_PX) onExpandedChange(false)
-                            else if (dragged < -HANDLE_DRAG_PX) onExpandedChange(true)
-                        },
-                    )
-                }
-        }
         Box(
-            modifier = Modifier.fillMaxWidth().height(24.dp).then(handleArea),
+            modifier = Modifier.fillMaxWidth().height(24.dp),
             contentAlignment = Alignment.Center,
         ) {
             Box(
@@ -273,7 +313,8 @@ fun BottomSheet(
     }
 }
 
-private const val HANDLE_DRAG_PX = 24f
+private val SHEET_DRAG_THRESHOLD = 56.dp
+private const val SHEET_FLING_VELOCITY = 1200f // px/s
 
 /** Connection-state dot. Color is the state; there is no other signal to read. */
 @Composable
