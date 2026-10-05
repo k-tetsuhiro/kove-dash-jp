@@ -1,3 +1,4 @@
+// Modified by k-tetsuhiro for kove-dash-jp (2026): bundle VT323 / Press Start 2P.
 package com.kovedash.app.ui.theme
 
 import androidx.compose.ui.text.font.FontFamily
@@ -38,13 +39,16 @@ object KoveFonts {
     )
 
     // Pixel/bitmap display — tiny UI labels, status badges, KV keys.
+    // Bundled (res/font) rather than downloaded: the dash HUD and rally screen size their
+    // numbers to these exact metrics, and a first use out of signal would otherwise fall back
+    // to a system font of a different width.
     val PressStart2P = FontFamily(
-        Font(googleFont = GoogleFont("Press Start 2P"), fontProvider = provider),
+        androidx.compose.ui.text.font.Font(R.font.press_start_2p_regular),
     )
 
     // Terminal — KV values, code/log readouts.
     val VT323 = FontFamily(
-        Font(googleFont = GoogleFont("VT323"), fontProvider = provider),
+        androidx.compose.ui.text.font.Font(R.font.vt323_regular),
     )
 
     // Narrow industrial — fine print, stage meta.

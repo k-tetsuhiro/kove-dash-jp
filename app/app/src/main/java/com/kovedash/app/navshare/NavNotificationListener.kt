@@ -1,9 +1,16 @@
 package com.kovedash.app.navshare
 
+import android.app.Notification
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.Drawable
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
 import com.kovedash.app.BuildConfig
+import java.io.File
 
 /**
  * Reads Google Maps' ongoing navigation notification and forwards each turn to the dash
@@ -11,12 +18,18 @@ import com.kovedash.app.BuildConfig
  * does all routing; we're a relay. Requires the user to grant Notification Access
  * (Settings → Notification access) — see AppHost.openNotificationAccessSettings().
  *
- * Swap point: [classifier] is the only thing that changes to move from text parsing to
- * icon-bitmap matching later.
+ * The maneuver comes from the text when it names one, else from the arrow icon (large icon)
+ * via [IconAwareManeuverClassifier] — see ArrowIcon for why Japanese intersections need it.
  */
 class NavNotificationListener : NotificationListenerService() {
 
-    private val classifier: ManeuverClassifier = TextManeuverClassifier()
+    private val classifier: ManeuverClassifier by lazy {
+        IconAwareManeuverClassifier(TextManeuverClassifier(), IconManeuverMemory(PrefsIconStorage(this)))
+    }
+
+    // Debug builds dump each distinct arrow once (hash-named PNG) to calibrate ArrowIcon's lean
+    // thresholds against real Maps glyphs: adb pull …/files/maneuver_icons.
+    private val dumpedHashes = HashSet<String>()
 
     // The StatusBarNotification key of the active Maps nav notification, so we can match
     // its removal (nav ended) precisely rather than tearing down on any Maps notification.
@@ -39,7 +52,14 @@ class NavNotificationListener : NotificationListenerService() {
             Log.d(TAG, "navshare notif extras: ${n.extras.keySet().joinToString(",")}")
         }
         if (n == null || !ongoing || !localOnly) return
-        val update = NavNotificationParser.parse(n.extras, classifier)
+        val icon = readArrow(n)
+        if (icon == null) {
+            Log.i(TAG, "navshare icon: none readable")
+        } else {
+            Log.i(TAG, "navshare icon: hash=${icon.hashHex.take(16)}… lean=${"%.2f".format(icon.lean)} " +
+                "guess=${icon.geometricGuess()}")
+        }
+        val update = NavNotificationParser.parse(n.extras, classifier, icon)
         if (update == null) {
             Log.i(TAG, "navshare: parse=null (no usable maneuver/distance) — skipping")
             return
@@ -67,7 +87,8 @@ class NavNotificationListener : NotificationListenerService() {
             activeNotifications
                 ?.firstOrNull { isMapsNav(it) }
                 ?.let { sbn ->
-                    NavNotificationParser.parse(sbn.notification.extras, classifier)?.let { update ->
+                    val n = sbn.notification
+                    NavNotificationParser.parse(n.extras, classifier, readArrow(n))?.let { update ->
                         activeNavKey = sbn.key
                         NavForwarder.onUpdate(applicationContext, update)
                     }
@@ -86,6 +107,34 @@ class NavNotificationListener : NotificationListenerService() {
         super.onDestroy()
     }
 
+    /**
+     * The notification's large icon — Maps' maneuver arrow — rasterized and reduced to an
+     * [ArrowIcon]. Null when there's no icon or it can't be drawn; the caller then relies on text.
+     */
+    private fun readArrow(n: Notification): ArrowIcon? = runCatching {
+        @Suppress("DEPRECATION")
+        val drawable: Drawable = n.getLargeIcon()?.loadDrawable(this)
+            ?: (n.extras.getParcelable(Notification.EXTRA_LARGE_ICON) as? Bitmap)?.let { BitmapDrawable(resources, it) }
+            ?: return null
+        val w = drawable.intrinsicWidth.let { if (it in 1..ICON_MAX_PX) it else ICON_MAX_PX }
+        val h = drawable.intrinsicHeight.let { if (it in 1..ICON_MAX_PX) it else ICON_MAX_PX }
+        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        drawable.setBounds(0, 0, w, h)
+        drawable.draw(Canvas(bmp))
+        val px = IntArray(w * h)
+        bmp.getPixels(px, 0, w, 0, 0, w, h)
+        val icon = ArrowIcon.fromArgb(px, w, h)
+        if (BuildConfig.DEBUG && icon != null && dumpedHashes.add(icon.hashHex)) dumpIcon(bmp, icon)
+        bmp.recycle()
+        icon
+    }.onFailure { Log.w(TAG, "navshare icon read failed", it) }.getOrNull()
+
+    private fun dumpIcon(bmp: Bitmap, icon: ArrowIcon) = runCatching {
+        val dir = File(getExternalFilesDir(null), "maneuver_icons").apply { mkdirs() }
+        val f = File(dir, "${icon.hashHex.take(16)}_lean${"%.2f".format(icon.lean)}.png")
+        if (!f.exists()) f.outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+    }
+
     /** Google Maps + ongoing + local-only = the navigation notification (Gadgetbridge's filter). */
     private fun isMapsNav(sbn: StatusBarNotification): Boolean {
         if (sbn.packageName != MAPS_PKG) return false
@@ -97,6 +146,7 @@ class NavNotificationListener : NotificationListenerService() {
     companion object {
         private const val TAG = "KoveDash"
         private const val MAPS_PKG = "com.google.android.apps.maps"
+        private const val ICON_MAX_PX = 128
 
         // Live listener instance, so a full app quit can release it. The system binds a
         // NotificationListenerService PERSISTENTLY and RESPAWNS the process whenever it dies —
@@ -120,5 +170,17 @@ class NavNotificationListener : NotificationListenerService() {
                 requestRebind(android.content.ComponentName(ctx, NavNotificationListener::class.java))
             }
         }
+    }
+}
+
+/** [IconManeuverMemory] persistence: one SharedPreferences entry per learned icon hash. */
+private class PrefsIconStorage(ctx: Context) : IconManeuverMemory.Storage {
+    private val prefs = ctx.applicationContext.getSharedPreferences("icon_maneuvers", Context.MODE_PRIVATE)
+
+    override fun load(): Map<String, String> =
+        prefs.all.mapNotNull { (k, v) -> (v as? String)?.let { k to it } }.toMap()
+
+    override fun save(entries: Map<String, String>) {
+        prefs.edit().clear().apply { entries.forEach { (k, v) -> putString(k, v) } }.apply()
     }
 }

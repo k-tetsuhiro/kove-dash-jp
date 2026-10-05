@@ -1,8 +1,11 @@
+// Modified by k-tetsuhiro for kove-dash-jp (2026): expose the latest reading for the rally screen.
 package com.kovedash.app.net
 
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -38,6 +41,10 @@ object WeatherSource {
     @Volatile private var cached: Weather? = null
     @Volatile private var cachedAtMs: Long = 0L
 
+    // The reading last pushed to the dash, for the projected rally screen to show the same.
+    private val _latest = MutableStateFlow<Weather?>(null)
+    val latest: StateFlow<Weather?> = _latest
+
     /**
      * Fetch current weather with a short retry loop, falling back to the last good reading.
      * Returns a fresh value on success (and caches it); on failure returns the cached value
@@ -49,6 +56,7 @@ object WeatherSource {
             fetchOnce(lat, lon)?.let { fresh ->
                 cached = fresh
                 cachedAtMs = System.currentTimeMillis()
+                _latest.value = fresh
                 return@withContext fresh
             }
             if (attempt < MAX_ATTEMPTS - 1) delay(RETRY_BACKOFF_MS * (attempt + 1))
@@ -56,7 +64,7 @@ object WeatherSource {
         val c = cached
         if (c != null && System.currentTimeMillis() - cachedAtMs <= MAX_STALE_MS) {
             Log.i(TAG, "weather: live fetch failed — serving cached reading (stale)")
-            return@withContext c.copy(stale = true)
+            return@withContext c.copy(stale = true).also { _latest.value = it }
         }
         Log.w(TAG, "weather: live fetch failed and no usable cache")
         null
