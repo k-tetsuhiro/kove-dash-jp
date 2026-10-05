@@ -105,6 +105,9 @@ fun NavMap(
     // How much of the map's bottom edge the caller's bottom sheet covers. The in-app
     // overlays inset by this so they don't end up hidden underneath it.
     overlayBottomInset: Dp = 16.dp,
+    // How much of the map's left edge the caller's side panel covers (landscape route
+    // preview). The route-overview fit keeps clear of it.
+    overlayStartInset: Dp = 0.dp,
     // True for the phone's main map: its zoom (pinch, recenter, course fit) becomes the
     // dash map's zoom via AppHost.mapZoom. Off for route preview, whose fit-to-route zoom is
     // a phone-only look at alternatives.
@@ -200,9 +203,18 @@ fun NavMap(
                 minLon = minOf(minLon, it.longitude()); maxLon = maxOf(maxLon, it.longitude())
             }
         }
+        // Fit inside what the caller's chrome leaves uncovered, so no candidate ends up
+        // under the route sheet / side panel.
+        val px = mv.resources.displayMetrics.density
         val cam = mv.mapboxMap.cameraForCoordinateBounds(
             CoordinateBounds(Point.fromLngLat(minLon, minLat), Point.fromLngLat(maxLon, maxLat)),
-            EdgeInsets(70.0, 50.0, 70.0, 50.0), 0.0, 0.0,
+            EdgeInsets(
+                70.0,
+                50.0 + overlayStartInset.value * px,
+                70.0 + overlayBottomInset.value * px,
+                50.0,
+            ),
+            0.0, 0.0,
         )
         mv.mapboxMap.easeTo(cam, MapAnimationOptions.mapAnimationOptions { duration(700L) })
     }

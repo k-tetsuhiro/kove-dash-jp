@@ -7,6 +7,20 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.unit.min
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -208,82 +222,136 @@ fun FullscreenSearch(
         }
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(AppColors.Surface)
-            .statusBarsPadding()
-            .imePadding(),
+    // Scrolling the results drops the keyboard, as Maps does — in landscape the IME covers
+    // half the screen, so this is how the rider gets the list (and the map) back.
+    val listState = rememberLazyListState()
+    LaunchedEffect(listState.isScrollInProgress) {
+        if (listState.isScrollInProgress) focusManager.clearFocus()
+    }
+
+    val content: @Composable () -> Unit = {
+        SearchContent(
+            query = query,
+            onQueryChange = { query = it },
+            suggestions = suggestions,
+            retrieving = retrieving,
+            listState = listState,
+            focusRequester = focusRequester,
+            onBack = {
+                focusManager.clearFocus()
+                onDone()
+            },
+            onSelect = ::select,
+        )
+    }
+
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        if (maxWidth > maxHeight) {
+            // Landscape: a card down the left edge, the same width as the map screen's side
+            // panel, so the map stays visible (and pannable) on the right. A full-screen
+            // sheet here left nothing of the map once the keyboard and results were up.
+            val shape = RoundedCornerShape(16.dp)
+            Column(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .width(min(SIDE_PANEL_MAX, maxWidth * 0.45f))
+                    .windowInsetsPadding(
+                        WindowInsets.safeDrawing.only(WindowInsetsSides.Start + WindowInsetsSides.Vertical),
+                    )
+                    .imePadding()
+                    .padding(12.dp)
+                    .shadow(6.dp, shape, clip = false)
+                    .clip(shape)
+                    .background(AppColors.Surface),
+            ) { content() }
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(AppColors.Surface)
+                    .statusBarsPadding()
+                    .imePadding(),
+            ) { content() }
+        }
+    }
+}
+
+@Composable
+private fun SearchContent(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    suggestions: List<MapboxGeocoder.Suggestion>,
+    retrieving: Boolean,
+    listState: LazyListState,
+    focusRequester: FocusRequester,
+    onBack: () -> Unit,
+    onSelect: (MapboxGeocoder.Suggestion) -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(56.dp)
+            .padding(horizontal = 14.dp),
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp)
-                .padding(horizontal = 14.dp),
-        ) {
+                .size(36.dp)
+                .clip(CircleShape)
+                .clickable(onClick = onBack),
+            contentAlignment = Alignment.Center,
+        ) { Glyph("←", AppColors.Ink, 20.sp) }
+        Box(Modifier.width(8.dp))
+        BasicTextField(
+            value = query,
+            onValueChange = onQueryChange,
+            singleLine = true,
+            modifier = Modifier.weight(1f).focusRequester(focusRequester),
+            textStyle = TextStyle(
+                color = AppColors.Ink,
+                fontSize = 16.sp,
+                fontFamily = AppFonts.Sans,
+            ),
+            cursorBrush = SolidColor(AppColors.Blue),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(
+                onSearch = { suggestions.firstOrNull()?.let(onSelect) },
+            ),
+            decorationBox = { inner ->
+                if (query.isEmpty()) {
+                    Text(
+                        text = "どこへ行く？",
+                        color = AppColors.Ink3,
+                        fontFamily = AppFonts.Sans,
+                        fontSize = 16.sp,
+                    )
+                }
+                inner()
+            },
+        )
+        if (query.isNotEmpty()) {
             Box(
                 modifier = Modifier
                     .size(36.dp)
                     .clip(CircleShape)
-                    .clickable {
-                        focusManager.clearFocus()
-                        onDone()
-                    },
+                    .clickable { onQueryChange("") },
                 contentAlignment = Alignment.Center,
-            ) { Glyph("←", AppColors.Ink, 20.sp) }
-            Box(Modifier.width(8.dp))
-            BasicTextField(
-                value = query,
-                onValueChange = { query = it },
-                singleLine = true,
-                modifier = Modifier.weight(1f).focusRequester(focusRequester),
-                textStyle = TextStyle(
-                    color = AppColors.Ink,
-                    fontSize = 16.sp,
-                    fontFamily = AppFonts.Sans,
-                ),
-                cursorBrush = SolidColor(AppColors.Blue),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(
-                    onSearch = { suggestions.firstOrNull()?.let(::select) },
-                ),
-                decorationBox = { inner ->
-                    if (query.isEmpty()) {
-                        Text(
-                            text = "どこへ行く？",
-                            color = AppColors.Ink3,
-                            fontFamily = AppFonts.Sans,
-                            fontSize = 16.sp,
-                        )
-                    }
-                    inner()
-                },
-            )
-            if (query.isNotEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .clickable { query = "" },
-                    contentAlignment = Alignment.Center,
-                ) { Glyph("✕", AppColors.Ink2, 15.sp) }
-            }
+            ) { Glyph("✕", AppColors.Ink2, 15.sp) }
         }
-        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(AppColors.Line))
+    }
+    Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(AppColors.Line))
 
-        when {
-            retrieving -> SearchMessage("目的地を取得しています…")
-            suggestions.isEmpty() && query.length >= 2 -> SearchMessage("該当する場所がありません")
-            suggestions.isNotEmpty() -> LazyColumn(modifier = Modifier.fillMaxSize()) {
-                items(suggestions) { sug ->
-                    SuggestionRow(
-                        name = sug.name,
-                        context = sug.context,
-                        featureType = sug.featureType,
-                        onClick = { select(sug) },
-                    )
-                }
+    when {
+        retrieving -> SearchMessage("目的地を取得しています…")
+        suggestions.isEmpty() && query.length >= 2 -> SearchMessage("該当する場所がありません")
+        suggestions.isNotEmpty() -> LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+            items(suggestions) { sug ->
+                SuggestionRow(
+                    name = sug.name,
+                    context = sug.context,
+                    featureType = sug.featureType,
+                    onClick = { onSelect(sug) },
+                )
             }
         }
     }
@@ -364,33 +432,69 @@ fun RoutePreviewScreen(modifier: Modifier = Modifier) {
     val options by Navigator.routeOptions.collectAsState()
     val p = preview ?: return
 
-    Box(modifier = modifier.fillMaxSize().background(AppColors.Surface2)) {
-        NavMap(
-            modifier = Modifier.fillMaxSize(),
-            keepAlive = false,
-            autoFollow = false,
-            // The route sheet is taller than the connection sheet — three route rows,
-            // the avoid chips and START.
-            overlayBottomInset = 260.dp,
-        )
+    BoxWithConstraints(modifier = modifier.fillMaxSize().background(AppColors.Surface2)) {
+        if (maxWidth > maxHeight) {
+            // Landscape: destination + candidates in a left panel, as on the main map, so the
+            // route keeps the rest of the screen. A bottom sheet here covered most of it.
+            val panelWidth = min(SIDE_PANEL_MAX, maxWidth * 0.45f)
+            NavMap(
+                modifier = Modifier.fillMaxSize(),
+                keepAlive = false,
+                autoFollow = false,
+                overlayStartInset = panelWidth,
+            )
+            Column(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .fillMaxHeight()
+                    .width(panelWidth)
+                    .windowInsetsPadding(
+                        WindowInsets.safeDrawing.only(WindowInsetsSides.Start + WindowInsetsSides.Vertical),
+                    )
+                    // Three routes + chips + START outgrow a ~360dp-tall screen.
+                    .verticalScroll(rememberScrollState())
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                PreviewDestinationBar(p.destination.name, Modifier.fillMaxWidth())
+                RoutePreviewSheet(preview = p, options = options, shape = RoundedCornerShape(16.dp))
+            }
+        } else {
+            NavMap(
+                modifier = Modifier.fillMaxSize(),
+                keepAlive = false,
+                autoFollow = false,
+                // The route sheet is taller than the connection sheet — three route rows,
+                // the avoid chips and START.
+                overlayBottomInset = 260.dp,
+            )
 
-        FloatingSearchBar(
-            placeholder = "",
-            value = p.destination.name,
-            onClick = { Navigator.cancelPreview() },
-            leading = { Glyph("←", AppColors.Ink, 20.sp) },
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .statusBarsPadding()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-        )
+            PreviewDestinationBar(
+                p.destination.name,
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+            )
 
-        RoutePreviewSheet(
-            preview = p,
-            options = options,
-            modifier = Modifier.align(Alignment.BottomCenter),
-        )
+            RoutePreviewSheet(
+                preview = p,
+                options = options,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
+        }
     }
+}
+
+@Composable
+private fun PreviewDestinationBar(name: String, modifier: Modifier = Modifier) {
+    FloatingSearchBar(
+        placeholder = "",
+        value = name,
+        onClick = { Navigator.cancelPreview() },
+        leading = { Glyph("←", AppColors.Ink, 20.sp) },
+        modifier = modifier,
+    )
 }
 
 /**
@@ -403,8 +507,9 @@ private fun RoutePreviewSheet(
     preview: RoutePreview,
     options: MapboxDirections.Options,
     modifier: Modifier = Modifier,
+    shape: Shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
 ) {
-    BottomSheet(modifier = modifier) {
+    BottomSheet(modifier = modifier, shape = shape) {
         when (preview.status) {
             PreviewStatus.WaitingForGps -> PreviewMessage("GPS を待っています…")
             PreviewStatus.Fetching -> PreviewMessage("ルートを探しています…")
