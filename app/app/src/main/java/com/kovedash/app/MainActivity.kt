@@ -217,8 +217,10 @@ private fun App() {
             // Order matters: drawn last so it covers everything else. Surface stacks
             // its children Box-style.
             if (searching) {
+                // No background here: in landscape the search is a side card and the map
+                // must show through on the right.
                 FullscreenSearch(
-                    modifier = Modifier.fillMaxSize().background(KoveColors.Void),
+                    modifier = Modifier.fillMaxSize(),
                     onDone = { searching = false },
                 )
             }

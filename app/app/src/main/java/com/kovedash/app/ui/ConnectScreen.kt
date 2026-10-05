@@ -717,7 +717,7 @@ private fun ManeuverShell(modifier: Modifier, content: @Composable RowScope.() -
     )
 }
 
-private val SIDE_PANEL_MAX = 360.dp
+internal val SIDE_PANEL_MAX = 360.dp
 
 /** Phases where the dash link is up — the sheet's project / stop / disconnect state. */
 private val LINKED = setOf(

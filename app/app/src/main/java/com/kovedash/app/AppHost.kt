@@ -266,7 +266,7 @@ object AppHost {
 
     // Selected map view (style + camera pitch) for the dash and in-app map. Cycled by a
     // phone-side button and, once we confirm the wire event, by a bike button.
-    private val _dashView = MutableStateFlow(DashView.NAV_3D)
+    private val _dashView = MutableStateFlow(DashView.TRAIL_3D)
     val dashView: StateFlow<DashView> = _dashView
 
     fun cycleDashView() {
