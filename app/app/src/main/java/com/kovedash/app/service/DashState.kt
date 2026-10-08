@@ -1,3 +1,4 @@
+// Modified by k-tetsuhiro for kove-dash-jp (2026): per-radio link status and the pending Wi-Fi activation.
 package com.kovedash.app.service
 
 enum class ConnectionPhase {
@@ -13,6 +14,13 @@ enum class ConnectionPhase {
     RECONNECTING,
     ERROR,
 }
+
+/**
+ * One radio's link to the dash, shown as its own row in the connection sheet
+ * (design/connection-status-mockup.html). Wi-Fi only uses [STANDBY]: it is dropped on purpose
+ * once it has activated the dash's rendering, and comes back on its own for projection.
+ */
+enum class LinkStatus { IDLE, CONNECTING, CONNECTED, STANDBY, OFF, FAILED }
 
 data class TelemetryFinding(
     val label: String,
@@ -36,6 +44,12 @@ data class DashState(
     // dash's native rendering. Widgets keep flowing over BLE; the supervisor won't fight the
     // (expected) Wi-Fi loss. Re-arm Wi-Fi via [AppHost.unparkWifi] (or projecting).
     val wifiParked: Boolean = false,
+    val wifiLink: LinkStatus = LinkStatus.IDLE,
+    val bleLink: LinkStatus = LinkStatus.IDLE,
+    // BLE is up but the dash hasn't had this power-cycle's Wi-Fi/17818 activation yet (the
+    // phone's Wi-Fi was off, or the dash AP didn't answer), so its native widgets may stay
+    // dark. Cleared once the activation runs — on its own when Wi-Fi comes back on.
+    val needsWifiActivation: Boolean = false,
     // Whether the app has been granted Notification Access — required for the Google Maps
     // turn-by-turn forwarder (navshare). Default true so we don't flash the prompt before the
     // first real check (AppHost refreshes it on attach + on each resume).
