@@ -1,7 +1,10 @@
 // Modified by k-tetsuhiro for kove-dash-jp (2026): restore saved route options on attach;
-// dash screen (map / rally) selection and the rally trip meter.
+// dash screen (map / rally) selection and the rally trip meter; Wi-Fi / Bluetooth shortcuts and the
+// Wi-Fi activation retry for the connection sheet.
 package com.kovedash.app
 
+import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -151,6 +154,36 @@ object AppHost {
     fun unparkWifi() {
         _state.update { it.copy(wifiParked = false, errorMessage = null) }
         appContext?.let(DashService::unparkWifi)
+    }
+
+    /** Retry the dash's once-per-power-cycle Wi-Fi activation over the live BLE link — the
+     *  sheet's button after the dash AP didn't answer. */
+    fun activateWifi() {
+        _state.update { it.copy(errorMessage = null) }
+        appContext?.let(DashService::activateWifi)
+    }
+
+    /** Open the system Wi-Fi switch. Apps can't turn Wi-Fi on themselves since Android 10, so
+     *  this is the settings panel that slides over the app; the service notices the change. */
+    fun openWifiPanel() {
+        val ctx = appContext ?: return
+        val action = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            Settings.Panel.ACTION_WIFI
+        } else {
+            Settings.ACTION_WIFI_SETTINGS
+        }
+        runCatching { ctx.startActivity(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+    }
+
+    /** Ask the system to turn Bluetooth on (its own yes/no dialog). */
+    @SuppressLint("MissingPermission")
+    fun requestBluetoothEnable() {
+        val ctx = appContext ?: return
+        runCatching {
+            ctx.startActivity(
+                Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }
     }
 
     /** Stop the video stream but KEEP the dash link (BLE + Wi-Fi control) up and quiet, so the

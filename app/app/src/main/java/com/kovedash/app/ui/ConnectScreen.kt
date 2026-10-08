@@ -1,12 +1,11 @@
 // Modified by k-tetsuhiro for kove-dash-jp (2026): Maps-style phone UI (design/v2-mockup.html);
-// map / rally dash screen toggle and rally controls (design/rally-switch-mockup.html).
+// map / rally dash screen toggle and rally controls (design/rally-switch-mockup.html); Wi-Fi /
+// Bluetooth link rows and the meter-screen picker in the connection sheet
+// (design/connection-status-mockup.html, design/meter-screen-picker-mockup.html).
 package com.kovedash.app.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -47,7 +46,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -63,11 +61,11 @@ import com.kovedash.app.nav.Navigator
 import com.kovedash.app.nav.RouteStatus
 import com.kovedash.app.service.ConnectionPhase
 import com.kovedash.app.service.DashState
+import com.kovedash.app.service.LinkStatus
 import com.kovedash.app.ui.components.AppButton
 import com.kovedash.app.ui.components.BottomSheet
 import com.kovedash.app.ui.components.ButtonTone
 import com.kovedash.app.ui.components.Glyph
-import com.kovedash.app.ui.components.LinearProgress
 import com.kovedash.app.ui.components.MapFab
 import com.kovedash.app.ui.components.MapPill
 import com.kovedash.app.ui.components.StateDot
@@ -311,9 +309,10 @@ private fun NotifAccessPrompt(onClick: () -> Unit) {
 }
 
 /**
- * Connection state and its actions. Three shapes, matching what the rider can actually do:
- * not connected (one Connect button), working (stage + progress + cancel), connected
- * (project / disconnect).
+ * Connection state and its actions. The header says where things stand; under it, one row per
+ * radio, so a stalled connect shows which half it's waiting on (design/connection-status-mockup.html).
+ * Not connected: one Connect button. Working: the rows and cancel. Connected: which screen goes
+ * to the meter (design/meter-screen-picker-mockup.html), show it / stop, disconnect.
  */
 @Composable
 private fun ConnectionSheet(
@@ -327,6 +326,7 @@ private fun ConnectionSheet(
     modifier: Modifier = Modifier,
     shape: Shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
 ) {
+    val dashScreen by AppHost.dashScreen.collectAsState()
     BottomSheet(
         modifier = modifier,
         shape = shape,
@@ -334,11 +334,11 @@ private fun ConnectionSheet(
         onExpandedChange = onExpandedChange,
     ) {
         if (!expanded) {
-            CollapsedSheetRow(state, onConnect, onProject, onStopProjection, onDisconnect)
+            CollapsedSheetRow(state, dashScreen, onConnect, onProject, onStopProjection, onDisconnect)
             return@BottomSheet
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            StateDot(color = phaseColor(state.phase))
+            StateDot(color = dotColor(state))
             Box(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -349,7 +349,7 @@ private fun ConnectionSheet(
                     fontSize = 17.sp,
                 )
                 Text(
-                    text = subtitleFor(state),
+                    text = subtitleFor(state, dashScreen),
                     color = AppColors.Ink2,
                     fontFamily = AppFonts.Sans,
                     fontSize = 13.sp,
@@ -360,10 +360,12 @@ private fun ConnectionSheet(
             }
         }
 
-        if (isWorking(state.phase)) {
+        if (state.phase != ConnectionPhase.IDLE) {
             Box(Modifier.height(14.dp))
-            LinearProgress(fraction = stageIndex(state.phase) / 6f)
+            LinkRows(state)
         }
+
+        ActivationNotice(state)
 
         if (state.errorMessage != null) {
             Box(Modifier.height(12.dp))
@@ -373,42 +375,62 @@ private fun ConnectionSheet(
         when (state.phase) {
             ConnectionPhase.IDLE, ConnectionPhase.ERROR -> {
                 Box(Modifier.height(14.dp))
-                AppButton(
-                    label = "接続",
-                    onClick = onConnect,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (state.bleLink == LinkStatus.OFF) {
+                        AppButton(
+                            label = "Bluetooth をオンにする",
+                            tone = ButtonTone.Outline,
+                            onClick = AppHost::requestBluetoothEnable,
+                        )
+                    }
+                    AppButton(
+                        label = "接続",
+                        onClick = onConnect,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
             }
             in LINKED -> {
                 Box(Modifier.height(14.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "メーター画面",
-                        color = AppColors.Ink2,
-                        fontFamily = AppFonts.Sans,
-                        fontSize = 14.sp,
-                        modifier = Modifier.weight(1f),
-                    )
-                    DashScreenToggle()
-                }
-                Box(Modifier.height(12.dp))
+                MeterScreenPicker(
+                    selected = dashScreen,
+                    showing = state.phase == ConnectionPhase.PROJECTING,
+                    onSelect = AppHost::setDashScreen,
+                )
+                Box(Modifier.height(14.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (state.liveMode) {
                         AppButton(
-                            label = "投影を停止",
+                            label = "表示をやめる",
                             tone = ButtonTone.Danger,
                             onClick = onStopProjection,
                             modifier = Modifier.weight(1f),
                         )
                     } else {
                         AppButton(
-                            label = "画面を投影",
+                            label = "メーターに表示",
                             tone = ButtonTone.Tonal,
                             onClick = onProject,
+                            enabled = canShowOnMeter(state),
                             modifier = Modifier.weight(1f),
                         )
                     }
                     AppButton(label = "切断", tone = ButtonTone.Outline, onClick = onDisconnect)
+                }
+                // Activated earlier, Wi-Fi turned off since: widgets still run over BLE, only
+                // the video needs it. Say why the button is grey.
+                if (!state.liveMode && !state.needsWifiActivation && state.wifiLink == LinkStatus.OFF) {
+                    Box(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "メーターに表示するには Wi-Fi が必要です",
+                            color = AppColors.Ink2,
+                            fontFamily = AppFonts.Sans,
+                            fontSize = 12.sp,
+                            modifier = Modifier.weight(1f),
+                        )
+                        AppButton(label = "Wi-Fi をオンにする", tone = ButtonTone.Text, onClick = AppHost::openWifiPanel)
+                    }
                 }
             }
             else -> Unit  // working phases: the cancel button in the header row is enough
@@ -417,23 +439,66 @@ private fun ConnectionSheet(
 }
 
 /**
- * The sheet folded to one row: state, and the single action that matters in it. Drag the
- * sheet up to expand it back; disconnect lives only in the expanded form.
+ * Connected over BLE without this power-cycle's Wi-Fi activation, so the dash may not draw
+ * its widgets yet. Says so, with the one action that fixes it.
+ */
+@Composable
+private fun ActivationNotice(state: DashState) {
+    if (state.phase !in LINKED || !state.needsWifiActivation) return
+    val (text, label, action) = when (state.wifiLink) {
+        LinkStatus.CONNECTING -> return  // activation running; the Wi-Fi row says so
+        LinkStatus.OFF -> Triple(
+            "ダッシュにナビや天気を表示するには、最初に一度 Wi-Fi で接続する必要があります。Wi-Fi をオンにすると、自動で続きを行います。",
+            "Wi-Fi をオンにする",
+            AppHost::openWifiPanel,
+        )
+        else -> Triple(
+            "ダッシュの Wi-Fi に接続できませんでした。メーターにナビや天気が出ないときは、もう一度試してください。",
+            "Wi-Fi でもう一度試す",
+            AppHost::activateWifi,
+        )
+    }
+    Box(Modifier.height(12.dp))
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(AppColors.WarnBg)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Text(
+            text = text,
+            color = AppColors.WarnInk,
+            fontFamily = AppFonts.Sans,
+            fontSize = 13.sp,
+            lineHeight = 18.sp,
+        )
+        Box(Modifier.height(8.dp))
+        AppButton(label = label, tone = ButtonTone.Outline, onClick = action)
+    }
+}
+
+/**
+ * The sheet folded to one row: state, both radios, and the single action that matters in it.
+ * Drag the sheet up to expand it back; disconnect lives only in the expanded form.
  */
 @Composable
 private fun CollapsedSheetRow(
     state: DashState,
+    dashScreen: DashScreen,
     onConnect: () -> Unit,
     onProject: () -> Unit,
     onStopProjection: () -> Unit,
     onDisconnect: () -> Unit,
 ) {
+    val linked = state.phase in LINKED
+    val wifiOffBlocking = linked && state.needsWifiActivation && state.wifiLink == LinkStatus.OFF
     Row(verticalAlignment = Alignment.CenterVertically) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.weight(1f),
         ) {
-            StateDot(color = phaseColor(state.phase))
+            StateDot(color = dotColor(state))
             Box(Modifier.width(12.dp))
             Text(
                 text = headlineFor(state),
@@ -445,63 +510,28 @@ private fun CollapsedSheetRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        // Linked, the row also carries the map / rally toggle, so the buttons go short —
-        // the headline beside them already says 投影中 / 接続済み.
-        if (state.phase in LINKED) {
-            DashScreenToggle()
+        if (state.phase != ConnectionPhase.IDLE) {
             Box(Modifier.width(8.dp))
+            LinkMiniIcons(state)
         }
+        // Which screen the meter gets, as the same little meter the picker shows.
+        if (linked && !wifiOffBlocking) {
+            Box(Modifier.width(8.dp))
+            MeterThumbnail(dashScreen, Modifier.width(40.dp))
+        }
+        Box(Modifier.width(8.dp))
         when {
-            state.phase in LINKED && state.liveMode ->
-                AppButton(label = "停止", tone = ButtonTone.Danger, onClick = onStopProjection)
-            state.phase in LINKED ->
-                AppButton(label = "投影", tone = ButtonTone.Tonal, onClick = onProject)
+            linked && state.liveMode ->
+                AppButton(label = "やめる", tone = ButtonTone.Danger, onClick = onStopProjection)
+            wifiOffBlocking ->
+                AppButton(label = "Wi-Fi をオン", tone = ButtonTone.Tonal, onClick = AppHost::openWifiPanel)
+            linked ->
+                AppButton(label = "表示", tone = ButtonTone.Tonal, onClick = onProject, enabled = canShowOnMeter(state))
             isWorking(state.phase) ->
                 AppButton(label = "キャンセル", tone = ButtonTone.Text, onClick = onDisconnect)
             else ->
                 AppButton(label = "接続", onClick = onConnect)
         }
-    }
-}
-
-/**
- * Which screen the dash projection shows. Selectable while merely connected too: the
- * choice is remembered and the next projection starts on it.
- */
-@Composable
-private fun DashScreenToggle() {
-    val selected by AppHost.dashScreen.collectAsState()
-    val shape = RoundedCornerShape(18.dp)
-    Row(
-        modifier = Modifier
-            .height(36.dp)
-            .clip(shape)
-            .border(1.dp, AppColors.Line, shape)
-            .selectableGroup(),
-    ) {
-        ToggleSegment("地図", selected == DashScreen.MAP) { AppHost.setDashScreen(DashScreen.MAP) }
-        Box(Modifier.width(1.dp).fillMaxHeight().background(AppColors.Line))
-        ToggleSegment("ラリー", selected == DashScreen.RALLY) { AppHost.setDashScreen(DashScreen.RALLY) }
-    }
-}
-
-@Composable
-private fun ToggleSegment(label: String, selected: Boolean, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .fillMaxHeight()
-            .background(if (selected) AppColors.BlueTint else AppColors.Surface)
-            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
-            .padding(horizontal = 12.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = if (selected) "✓ $label" else label,
-            color = if (selected) AppColors.BluePressed else AppColors.Ink2,
-            fontFamily = AppFonts.Sans,
-            fontWeight = FontWeight.Medium,
-            fontSize = 13.sp,
-        )
     }
 }
 
@@ -737,44 +767,45 @@ private fun isWorking(phase: ConnectionPhase) = phase in setOf(
     ConnectionPhase.RECONNECTING,
 )
 
-/** Where this phase sits in the six-step connect sequence, for the progress bar. */
-private fun stageIndex(phase: ConnectionPhase): Float = when (phase) {
-    ConnectionPhase.JOINING_WIFI -> 1f
-    ConnectionPhase.WIFI_READY -> 2f
-    ConnectionPhase.BLE_HANDSHAKE -> 3f
-    ConnectionPhase.BLE_READY -> 4f
-    ConnectionPhase.TCP_LISTENING -> 5f
-    ConnectionPhase.DEVICE_DIALED, ConnectionPhase.READY, ConnectionPhase.PROJECTING -> 6f
-    ConnectionPhase.RECONNECTING -> 1f
-    else -> 0f
-}
+/** Video goes over Wi-Fi; with the phone's Wi-Fi off there's nothing to show it with. */
+private fun canShowOnMeter(state: DashState) = state.wifiLink != LinkStatus.OFF
 
 private fun headlineFor(state: DashState): String = when (state.phase) {
     ConnectionPhase.IDLE -> "ダッシュ未接続"
     ConnectionPhase.ERROR -> "接続できませんでした"
     ConnectionPhase.RECONNECTING -> "再接続中"
-    ConnectionPhase.PROJECTING -> "投影中"
-    ConnectionPhase.DEVICE_DIALED, ConnectionPhase.READY -> "接続済み"
+    ConnectionPhase.PROJECTING -> "メーターに表示中"
+    ConnectionPhase.DEVICE_DIALED, ConnectionPhase.READY -> when {
+        state.needsWifiActivation && state.wifiLink == LinkStatus.CONNECTING -> "表示を有効化中"
+        state.needsWifiActivation -> "接続済み（表示は未有効）"
+        state.liveMode -> "表示の準備ができました"
+        else -> "接続済み"
+    }
     else -> "接続中"
 }
 
-private fun subtitleFor(state: DashState): String = when (state.phase) {
+private fun subtitleFor(state: DashState, screen: DashScreen): String = when (state.phase) {
     ConnectionPhase.IDLE -> "K450 Rally"
-    ConnectionPhase.JOINING_WIFI -> "ダッシュの Wi-Fi に接続 · 1/6"
-    ConnectionPhase.WIFI_READY -> "Wi-Fi 確立 · 2/6"
-    ConnectionPhase.BLE_HANDSHAKE -> "BLE ハンドシェイク · 3/6"
-    ConnectionPhase.BLE_READY -> "BLE 確立 · 4/6"
-    ConnectionPhase.TCP_LISTENING -> "制御チャンネル待機 · 5/6"
-    ConnectionPhase.DEVICE_DIALED -> "リンク確立 · 6/6"
-    ConnectionPhase.READY -> "ウィジェットを BLE で送信中 · 映像オフ"
-    ConnectionPhase.PROJECTING -> "地図の映像を送信中"
+    ConnectionPhase.JOINING_WIFI -> "ダッシュの Wi-Fi に接続しています"
+    ConnectionPhase.WIFI_READY -> "Wi-Fi に接続しました"
+    ConnectionPhase.BLE_HANDSHAKE -> "Bluetooth で接続しています"
+    ConnectionPhase.BLE_READY -> "Bluetooth に接続しました"
+    ConnectionPhase.TCP_LISTENING -> "メーターの応答を待っています"
+    ConnectionPhase.DEVICE_DIALED, ConnectionPhase.READY -> when {
+        state.needsWifiActivation && state.wifiLink == LinkStatus.CONNECTING -> "Wi-Fi で一度だけ接続しています"
+        state.needsWifiActivation -> "Bluetooth で接続しました"
+        state.liveMode -> "メーターの UP ボタンを長押ししてください"
+        else -> "メーターは標準画面（速度・天気・ナビ）"
+    }
+    ConnectionPhase.PROJECTING -> "${screen.meterName()}をメーターに表示しています"
     ConnectionPhase.RECONNECTING -> "再試行 ${state.reconnectAttempt} 回目"
-    ConnectionPhase.ERROR -> "設定を確認して、もう一度お試しください"
+    ConnectionPhase.ERROR -> "下の内容を確認して、もう一度お試しください"
 }
 
-private fun phaseColor(phase: ConnectionPhase): Color = when (phase) {
+private fun dotColor(state: DashState): Color = when (state.phase) {
     ConnectionPhase.IDLE -> AppColors.Ink3
-    ConnectionPhase.READY, ConnectionPhase.DEVICE_DIALED -> AppColors.Green
+    ConnectionPhase.READY, ConnectionPhase.DEVICE_DIALED ->
+        if (state.needsWifiActivation) AppColors.Amber else AppColors.Green
     ConnectionPhase.PROJECTING -> AppColors.Red
     ConnectionPhase.ERROR -> AppColors.Red
     else -> AppColors.Amber

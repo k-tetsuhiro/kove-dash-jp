@@ -1,3 +1,4 @@
+// Modified by k-tetsuhiro for kove-dash-jp (2026): Wi-Fi radio check; the join wait ends on onUnavailable.
 package com.kovedash.app.net
 
 import android.content.Context
@@ -12,7 +13,7 @@ import android.os.PatternMatcher
 import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -47,6 +48,13 @@ class DashWifi(private val context: Context) {
         val raw = dhcp.serverAddress
         if (raw == 0) return null
         return int2ip(raw)
+    }
+
+    /** Whether the phone's Wi-Fi radio is on. With it off, a dash NetworkRequest just sits
+     *  pending (the OS never turns Wi-Fi on for us), so callers check this first. */
+    fun isWifiEnabled(): Boolean {
+        val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return false
+        return wifi.isWifiEnabled
     }
 
     /**
@@ -178,10 +186,12 @@ class DashWifi(private val context: Context) {
         Log.i(TAG, "registered fresh dash NetworkCallback")
     }
 
+    // Ends early on onUnavailable: the request is dead then, so waiting out the timeout
+    // would only keep the caller stuck.
     private suspend fun waitForBound(timeoutMs: Long): Network? {
         return withTimeoutOrNull(timeoutMs) {
-            _bound.filter { it }.first()
-            currentNetwork
+            val bound = combine(_bound, _unavailable) { b, u -> b to u }.first { (b, u) -> b || u }.first
+            if (bound) currentNetwork else null
         }
     }
 
