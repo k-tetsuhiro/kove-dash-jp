@@ -1,3 +1,4 @@
+// Modified by k-tetsuhiro for kove-dash-jp (2026): green / red tints for the connection sheet's link rows.
 package com.kovedash.app.ui.theme
 
 import androidx.compose.ui.graphics.Color
@@ -36,8 +37,10 @@ object AppColors {
     val Surface3 = Color(0xFFF1F3F4)
 
     val Green = Color(0xFF188038)
+    val GreenTint = Color(0xFFE6F4EA)
     val Amber = Color(0xFFF9AB00)
     val Red = Color(0xFFD93025)
+    val RedTint = Color(0xFFFCE8E6)
 
     /** Warning block: amber text on its own tinted ground (Material's "warning container"). */
     val WarnBg = Color(0xFFFEF7E0)

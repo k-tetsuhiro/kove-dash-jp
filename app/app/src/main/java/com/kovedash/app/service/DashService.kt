@@ -1,16 +1,22 @@
-// Modified by k-tetsuhiro for kove-dash-jp (2026): projected screen is map or rally (DashContent).
+// Modified by k-tetsuhiro for kove-dash-jp (2026): projected screen is map or rally (DashContent);
+// connect over BLE when the phone's Wi-Fi is off or the dash AP is unreachable, activate over Wi-Fi
+// later, and report Wi-Fi / BLE link status separately (design/connection-status-mockup.html).
 package com.kovedash.app.service
 
 import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.bluetooth.BluetoothManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.app.PendingIntent
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
+import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
@@ -38,6 +44,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 
 /**
  * Single foreground service that owns the connection lifecycle:
@@ -120,8 +127,38 @@ class DashService : Service() {
         // GpsSource is owned by AppHost (app-process scoped) so the Map tab has fixes
         // before the service ever starts. No need to start it here.
         scope.launch { watchPhaseForNotification() }
+        scope.launch { watchBleLink() }
+        registerWifiStateReceiver()
         scope.launch { watchBattery() }
         scope.launch { watchIdleAutoStop() }
+    }
+
+    /** Mirrors the GATT link into the sheet's Bluetooth row. A drop only clears a live or
+     *  in-flight state, so an explicit FAILED / OFF set by the connect path survives the
+     *  DISCONNECTED that follows it. */
+    private suspend fun watchBleLink() {
+        ble.connectionState.collect { s ->
+            AppHost.updateState {
+                when (s) {
+                    DashBleClient.State.CONNECTED -> it.copy(bleLink = LinkStatus.CONNECTED)
+                    DashBleClient.State.CONNECTING -> it.copy(bleLink = LinkStatus.CONNECTING)
+                    DashBleClient.State.DISCONNECTED ->
+                        if (it.bleLink == LinkStatus.CONNECTED || it.bleLink == LinkStatus.CONNECTING) {
+                            it.copy(bleLink = LinkStatus.IDLE)
+                        } else it
+                }
+            }
+        }
+    }
+
+    private fun registerWifiStateReceiver() {
+        val filter = IntentFilter(WifiManager.WIFI_STATE_CHANGED_ACTION)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(wifiStateReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(wifiStateReceiver, filter)
+        }
     }
 
     private suspend fun watchBattery() {
@@ -232,17 +269,19 @@ class DashService : Service() {
     private fun updateNotification(state: DashState) {
         if (quitting) return
         val (title, text) = when (state.phase) {
-            ConnectionPhase.IDLE -> "KoveDash" to "Idle"
-            ConnectionPhase.JOINING_WIFI -> "KoveDash · joining dash AP" to "Looking for CQKY_*"
-            ConnectionPhase.WIFI_READY -> "KoveDash · linked Wi-Fi" to "Gateway ${state.dashGatewayIp ?: ""}"
-            ConnectionPhase.BLE_HANDSHAKE -> "KoveDash · BLE handshake" to "Sending OEM bootstrap…"
-            ConnectionPhase.BLE_READY -> "KoveDash · BLE ready" to "Waiting for dash dial-in"
-            ConnectionPhase.TCP_LISTENING -> "KoveDash · TCP listening" to "17818 / 15457 / 15456 up"
-            ConnectionPhase.DEVICE_DIALED -> "KoveDash · dash linked" to "${state.firmware ?: "device dialed"}"
-            ConnectionPhase.READY -> "KoveDash · ready" to "Long-press UP to project"
-            ConnectionPhase.PROJECTING -> "KoveDash · streaming" to "30 fps to dash · 15456 TCP"
-            ConnectionPhase.RECONNECTING -> "KoveDash · reconnecting" to "attempt ${state.reconnectAttempt}"
-            ConnectionPhase.ERROR -> "KoveDash · error" to (state.errorMessage ?: "see app")
+            ConnectionPhase.IDLE -> "KoveDash" to "未接続"
+            ConnectionPhase.JOINING_WIFI -> "KoveDash · 接続中" to "ダッシュの Wi-Fi に接続しています"
+            ConnectionPhase.WIFI_READY -> "KoveDash · 接続中" to "Wi-Fi に接続しました"
+            ConnectionPhase.BLE_HANDSHAKE -> "KoveDash · 接続中" to "Bluetooth で接続しています"
+            ConnectionPhase.BLE_READY -> "KoveDash · 接続中" to "Bluetooth に接続しました"
+            ConnectionPhase.TCP_LISTENING -> "KoveDash · 接続中" to "メーターの応答を待っています"
+            ConnectionPhase.DEVICE_DIALED -> "KoveDash · 接続済み" to (state.firmware ?: "メーターと接続しました")
+            ConnectionPhase.READY ->
+                if (state.needsWifiActivation) "KoveDash · 接続済み" to "Wi-Fi をオンにすると、メーターの表示を有効にします"
+                else "KoveDash · 接続済み" to "天気・高度・ナビを Bluetooth で送信中"
+            ConnectionPhase.PROJECTING -> "KoveDash · メーターに表示中" to "映像を Wi-Fi で送信中"
+            ConnectionPhase.RECONNECTING -> "KoveDash · 再接続中" to "再試行 ${state.reconnectAttempt} 回目"
+            ConnectionPhase.ERROR -> "KoveDash · 接続できませんでした" to (state.errorMessage ?: "アプリを確認してください")
         }
         val mgr = getSystemService(NotificationManager::class.java) ?: return
         mgr.notify(NOTIF_ID, buildNotification(title, text))
@@ -258,7 +297,7 @@ class DashService : Service() {
             .addAction(
                 NotificationCompat.Action.Builder(
                     android.R.drawable.ic_menu_close_clear_cancel,
-                    "Disconnect",
+                    "切断",
                     // Full cold quit: tear everything down AND kill the process, so nothing lingers
                     // in memory until the app is launched again (ACTION_QUIT, not the soft STOP).
                     PendingIntent.getService(
@@ -335,9 +374,22 @@ class DashService : Service() {
                 scope.launch { runTestAltitude(altM) }
             }
             ACTION_ARM_PROJECTION -> scope.launch {
-                if (wifiParked) unparkWifi() // projection needs Wi-Fi/15456 — bring it back first
+                // Projection needs Wi-Fi/15456 — bring it back first. Without it the dash can't
+                // dial in, so arming would only leave the sheet waiting for nothing.
+                if (wifiParked && !unparkWifi()) {
+                    Log.w(TAG, "ARM_PROJECTION: Wi-Fi unavailable — not arming")
+                    AppHost.updateState {
+                        it.copy(
+                            liveMode = false,
+                            projectionWaitingForUp = false,
+                            errorMessage = "メーターの Wi-Fi に接続できないため、メーターに表示できません。",
+                        )
+                    }
+                    return@launch
+                }
                 armProjection() // on-demand video: open 15456, wait for UP
             }
+            ACTION_ACTIVATE_WIFI -> scope.launch { activateOverWifi() }
             ACTION_PARK_WIFI -> parkWifi()          // BLE-primary: drop Wi-Fi, keep BLE rendering
             ACTION_UNPARK_WIFI -> scope.launch { unparkWifi() }
             ACTION_PROJECT -> scope.launch { runProject() }
@@ -440,6 +492,14 @@ class DashService : Service() {
         wifiUnavailableJob = scope.launch {
             wifi.unavailable.collect { isUnavailable ->
                 if (!isUnavailable) return@collect
+                // With BLE up the session is still useful (widgets render over BLE): keep it,
+                // and let the sheet show the Wi-Fi row as failed. The waiting caller already
+                // got null from requestDashNetwork and has re-parked.
+                if (ble.connectionState.value == DashBleClient.State.CONNECTED) {
+                    Log.w(TAG, "Wi-Fi NetworkRequest unavailable — BLE still up, keeping the session")
+                    AppHost.updateState { it.copy(wifiLink = LinkStatus.FAILED) }
+                    return@collect
+                }
                 Log.w(TAG, "Wi-Fi NetworkRequest unavailable — stopping service to avoid consent re-prompt")
                 cancelReconnect()
                 AppHost.updateState {
@@ -535,6 +595,13 @@ class DashService : Service() {
             return false
         }
 
+        // Wi-Fi turned off mid-projection: rejoining can't work, so fall back to BLE-only
+        // instead of waiting out a dash NetworkRequest every attempt.
+        if (!wifiParked && !wifi.isWifiEnabled()) {
+            Log.i(TAG, "reconnect: phone Wi-Fi is off — parking, BLE-only")
+            parkWifi()
+        }
+
         if (wifiParked) {
             // BLE-PRIMARY steady state. Re-link BLE FIRST — reconnectAuto (autoConnect=true) waits
             // through a key-off→key-on, so the outage we measure once it lands tells us whether the
@@ -548,14 +615,8 @@ class DashService : Service() {
                 // the Wi-Fi/17818 control channel restores it. Rejoin the AP, run the handshake, give
                 // the dash a moment to re-dial 17818, then drop back to the BLE-only steady state.
                 Log.i(TAG, "reconnect: power-cycle — re-activating rendering over Wi-Fi/17818")
-                if (!unparkWifi()) {
+                if (!activateOverWifi()) {
                     Log.w(TAG, "reconnect: re-activation Wi-Fi rejoin failed — widgets may stay dark until Wi-Fi returns")
-                }
-                runHandshake()
-                if (ble.connectionState.value == DashBleClient.State.CONNECTED) {
-                    delay(4000)      // let the dash re-dial 17818 before we release Wi-Fi
-                    parkWifi()
-                    Log.i(TAG, "reconnect: re-activation done — re-parked to BLE-only")
                 }
             } else {
                 runHandshake()       // transient blip — BLE-only, no Wi-Fi churn
@@ -573,8 +634,14 @@ class DashService : Service() {
                     wifi.requestDashNetwork(settings.dashSsidPrefix, password, settings.dashExactSsid)
                 }
                 if (network == null) {
-                    Log.w(TAG, "reconnect: Wi-Fi request failed/timed out")
-                    return false
+                    if (ble.connectionState.value != DashBleClient.State.CONNECTED) {
+                        Log.w(TAG, "reconnect: Wi-Fi request failed/timed out")
+                        return false
+                    }
+                    // BLE survived: settle for BLE-only rather than retrying Wi-Fi forever.
+                    Log.w(TAG, "reconnect: Wi-Fi request failed/timed out — BLE still up, parking")
+                    parkWifi()
+                    AppHost.updateState { it.copy(wifiLink = if (wifi.isWifiEnabled()) LinkStatus.FAILED else LinkStatus.OFF) }
                 }
             } else {
                 Log.i(TAG, "reconnect: Wi-Fi still on dash (ssid=$currentSsid bound=$onDashApByBound), skip request")
@@ -878,7 +945,16 @@ class DashService : Service() {
     private suspend fun runConnect() {
         Log.i(TAG, "runConnect: begin")
         activationRelinkCount = 0  // fresh connect → fresh cold-loss retry budget
-        AppHost.updateState { it.copy(phase = ConnectionPhase.JOINING_WIFI, errorMessage = null) }
+        AppHost.updateState {
+            it.copy(
+                phase = ConnectionPhase.JOINING_WIFI,
+                errorMessage = null,
+                // Clear last attempt's verdicts; the live ones are re-derived below.
+                wifiLink = LinkStatus.IDLE,
+                bleLink = if (it.bleLink == LinkStatus.CONNECTED) LinkStatus.CONNECTED else LinkStatus.IDLE,
+                needsWifiActivation = false,
+            )
+        }
 
         // 1. Make sure we have a password to try.
         val password = settings.dashPassword
@@ -890,52 +966,28 @@ class DashService : Service() {
             return
         }
 
-        // 2. Already on the dash AP? Check by SSID, and fall back to the dash gateway
-        //    (192.168.10.1) since the SSID read can transiently return null right after
-        //    launch. Either signal means we're on the dash and can skip the Wi-Fi request
-        //    (and its dialog) entirely — this is the no-popup path when the phone already
-        //    auto-joined.
-        val currentSsid = wifi.currentSsid()
-        val onDashAp = currentSsid?.startsWith(settings.dashSsidPrefix) == true || wifi.isOnDashSubnet()
-        Log.i(TAG, "runConnect: current ssid=$currentSsid onDashSubnet=${wifi.isOnDashSubnet()} (onDashAp=$onDashAp)")
-
-        // 3. Not on the dash AP — request auto-join via NetworkRequest. Pass the exact
-        //    SSID (once learned) so Android caches the approval and stops re-prompting.
-        if (!onDashAp) {
-            Log.i(TAG, "runConnect: requesting dash network via NetworkRequest")
-            val network = wifi.requestDashNetwork(settings.dashSsidPrefix, password, settings.dashExactSsid)
-            if (network == null) {
-                // The request timed out — but the join can complete just after our window
-                // (Android slow, or a system dialog stole focus). Re-check the live SSID
-                // before giving up.
-                val nowSsid = wifi.currentSsid()
-                val nowOnDash = nowSsid?.startsWith(settings.dashSsidPrefix) == true
-                if (!nowOnDash) {
-                    Log.w(TAG, "runConnect: auto-join failed (ssid=$nowSsid)")
-                    // Only re-prompt for the password if we don't have one saved — a
-                    // transient join timeout with a saved password is almost never a bad
-                    // password, and forcing the dialog every time is the annoyance.
-                    AppHost.updateState {
-                        it.copy(
-                            phase = ConnectionPhase.ERROR,
-                            errorMessage = "Couldn't join the dash Wi-Fi. Bike on and in range? Tap Engage Link to retry.",
-                            needsPassword = password.isBlank(),
-                        )
-                    }
-                    return
-                }
-                Log.i(TAG, "runConnect: join completed after timeout (ssid=$nowSsid) — proceeding")
+        // 2. BLE carries everything after connect, so with the phone's Bluetooth off there's
+        //    nothing to fall back to — say so instead of failing a scan.
+        if (!isBluetoothEnabled()) {
+            Log.w(TAG, "runConnect: Bluetooth is off")
+            AppHost.updateState {
+                it.copy(
+                    phase = ConnectionPhase.ERROR,
+                    bleLink = LinkStatus.OFF,
+                    errorMessage = "スマホの Bluetooth がオフです。オンにしてから、もう一度接続してください。",
+                )
             }
-        }
-
-        val gateway = wifi.dashGatewayIp()
-        if (gateway == null) {
-            Log.w(TAG, "runConnect: joined AP but no DHCP gateway reported")
-            AppHost.updateState { it.copy(phase = ConnectionPhase.ERROR, errorMessage = "Joined AP but no DHCP gateway reported. Power-cycle dash and retry.") }
             return
         }
-        Log.i(TAG, "runConnect: dash gateway=$gateway")
-        AppHost.updateState { it.copy(phase = ConnectionPhase.WIFI_READY, dashGatewayIp = gateway, needsPassword = false) }
+
+        // 3. Wi-Fi first, but don't let it block BLE: with the phone's Wi-Fi off, or the dash
+        //    AP not answering, connect over BLE anyway and run the Wi-Fi activation later
+        //    (on its own once Wi-Fi comes on, or from the sheet's retry button).
+        val wifiJoined = joinDashWifiForConnect(password)
+        if (!wifiJoined) {
+            wifiParked = true
+            AppHost.updateState { it.copy(wifiParked = true, needsWifiActivation = true) }
+        }
 
         tcp.startDeviceListener()
         tcp.startHeartbeatListener()
@@ -947,12 +999,18 @@ class DashService : Service() {
         // Skip the BLE bring-up + handshake if we're already connected (e.g. a reconnect
         // where the GATT link survived). Otherwise do the full scan + connect + handshake.
         if (ble.connectionState.value != DashBleClient.State.CONNECTED) {
-            AppHost.updateState { it.copy(phase = ConnectionPhase.BLE_HANDSHAKE) }
+            AppHost.updateState { it.copy(phase = ConnectionPhase.BLE_HANDSHAKE, bleLink = LinkStatus.CONNECTING) }
             val connected = runCatching { ble.scanAndConnect(settings.dashSsidPrefix, settings.dashMac) }.onFailure {
                 Log.e(TAG, "BLE scanAndConnect threw", it)
             }.getOrDefault(false)
             if (!connected) {
-                AppHost.updateState { it.copy(phase = ConnectionPhase.ERROR, errorMessage = "BLE scan/connect failed.") }
+                AppHost.updateState {
+                    it.copy(
+                        phase = ConnectionPhase.ERROR,
+                        bleLink = LinkStatus.FAILED,
+                        errorMessage = "Bluetooth でメーターが見つかりません。バイクのキーがオンで、スマホが近くにあるか確認してください。",
+                    )
+                }
                 return
             }
             // Remember the exact MAC so next connect skips scanning (throttle-proof).
@@ -1019,6 +1077,129 @@ class DashService : Service() {
             if (ble.connectionState.value == DashBleClient.State.CONNECTED && !wifiParked) {
                 Log.i(TAG, "runConnect: auto-parking Wi-Fi (BLE-primary default)")
                 parkWifi()
+            }
+        }
+    }
+
+    /**
+     * The Wi-Fi half of [runConnect]: join the dash AP and read its gateway. Returns false —
+     * without the 45 s wait — when the phone's Wi-Fi is off, and after the wait when the AP
+     * never answered; [runConnect] then carries on over BLE alone.
+     */
+    private suspend fun joinDashWifiForConnect(password: String): Boolean {
+        if (!wifi.isWifiEnabled()) {
+            Log.w(TAG, "runConnect: phone Wi-Fi is off — skipping the dash AP, BLE first")
+            AppHost.updateState { it.copy(wifiLink = LinkStatus.OFF) }
+            return false
+        }
+        AppHost.updateState { it.copy(wifiLink = LinkStatus.CONNECTING) }
+
+        // Already on the dash AP? Check by SSID, and fall back to the dash gateway
+        // (192.168.10.1) since the SSID read can transiently return null right after
+        // launch. Either signal means we're on the dash and can skip the Wi-Fi request
+        // (and its dialog) entirely — this is the no-popup path when the phone already
+        // auto-joined.
+        val currentSsid = wifi.currentSsid()
+        val onDashAp = currentSsid?.startsWith(settings.dashSsidPrefix) == true || wifi.isOnDashSubnet()
+        Log.i(TAG, "runConnect: current ssid=$currentSsid onDashSubnet=${wifi.isOnDashSubnet()} (onDashAp=$onDashAp)")
+
+        // Not on the dash AP — request auto-join via NetworkRequest. Pass the exact
+        // SSID (once learned) so Android caches the approval and stops re-prompting.
+        if (!onDashAp) {
+            Log.i(TAG, "runConnect: requesting dash network via NetworkRequest")
+            val network = wifi.requestDashNetwork(settings.dashSsidPrefix, password, settings.dashExactSsid)
+            if (network == null) {
+                // The request timed out — but the join can complete just after our window
+                // (Android slow, or a system dialog stole focus). Re-check the live SSID
+                // before giving up.
+                val nowSsid = wifi.currentSsid()
+                val nowOnDash = nowSsid?.startsWith(settings.dashSsidPrefix) == true
+                if (!nowOnDash) {
+                    Log.w(TAG, "runConnect: auto-join failed (ssid=$nowSsid) — continuing over BLE")
+                    // Drop the pending request so a late onUnavailable can't tear down the
+                    // BLE-only session we're about to bring up.
+                    wifi.release()
+                    AppHost.updateState { it.copy(wifiLink = if (wifi.isWifiEnabled()) LinkStatus.FAILED else LinkStatus.OFF) }
+                    return false
+                }
+                Log.i(TAG, "runConnect: join completed after timeout (ssid=$nowSsid) — proceeding")
+            }
+        }
+
+        val gateway = wifi.dashGatewayIp()
+        if (gateway == null) {
+            Log.w(TAG, "runConnect: joined AP but no DHCP gateway reported — continuing over BLE")
+            wifi.release()
+            AppHost.updateState { it.copy(wifiLink = LinkStatus.FAILED) }
+            return false
+        }
+        Log.i(TAG, "runConnect: dash gateway=$gateway")
+        AppHost.updateState {
+            it.copy(
+                phase = ConnectionPhase.WIFI_READY,
+                dashGatewayIp = gateway,
+                needsPassword = false,
+                wifiLink = LinkStatus.CONNECTED,
+            )
+        }
+        return true
+    }
+
+    private fun isBluetoothEnabled(): Boolean =
+        getSystemService(BluetoothManager::class.java)?.adapter?.isEnabled == true
+
+    // Serializes [activateOverWifi]: the Wi-Fi-on broadcast, the sheet's retry button and a
+    // power-cycle reconnect can all ask for it at once.
+    private val activationLock = Mutex()
+
+    /**
+     * The dash's once-per-power-cycle activation over a live BLE link: join the AP, re-run the
+     * handshake so the dash dials 17818 and turns its native rendering on, then drop back to
+     * BLE-only. The handshake runs even when Wi-Fi can't come up — a rebooted dash needs it over
+     * BLE regardless — and [DashState.needsWifiActivation] stays set for a later try.
+     */
+    private suspend fun activateOverWifi(): Boolean {
+        if (!activationLock.tryLock()) {
+            Log.i(TAG, "activation: already running")
+            return false
+        }
+        try {
+            val wifiUp = unparkWifi()
+            runHandshake()
+            if (!wifiUp) {
+                AppHost.updateState { it.copy(needsWifiActivation = true) }
+                return false
+            }
+            if (ble.connectionState.value == DashBleClient.State.CONNECTED) {
+                delay(4000)      // let the dash re-dial 17818 before we release Wi-Fi
+                parkWifi()
+                Log.i(TAG, "activation: done — re-parked to BLE-only")
+            }
+            AppHost.updateState { it.copy(needsWifiActivation = false) }
+            return true
+        } finally {
+            activationLock.unlock()
+        }
+    }
+
+    /** Keeps the sheet's Wi-Fi row honest about the radio, and runs a pending activation the
+     *  moment the rider turns Wi-Fi back on. */
+    private val wifiStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.getIntExtra(WifiManager.EXTRA_WIFI_STATE, WifiManager.WIFI_STATE_UNKNOWN)) {
+                WifiManager.WIFI_STATE_DISABLED -> AppHost.updateState {
+                    if (it.phase == ConnectionPhase.IDLE) it else it.copy(wifiLink = LinkStatus.OFF)
+                }
+                WifiManager.WIFI_STATE_ENABLED -> {
+                    val s = AppHost.state.value
+                    if (s.wifiLink == LinkStatus.OFF) {
+                        AppHost.updateState { it.copy(wifiLink = if (wifiParked) LinkStatus.STANDBY else LinkStatus.IDLE) }
+                    }
+                    if (s.needsWifiActivation && ble.connectionState.value == DashBleClient.State.CONNECTED) {
+                        Log.i(TAG, "Wi-Fi turned on — running the pending activation")
+                        scope.launch { activateOverWifi() }
+                    }
+                }
             }
         }
     }
@@ -1290,7 +1471,9 @@ class DashService : Service() {
         Log.i(TAG, "park Wi-Fi — BLE-only steady state (rendering stays active over BLE)")
         wifiParked = true
         runCatching { wifi.release() } // drop the dash AP association; Wi-Fi radio idles
-        AppHost.updateState { it.copy(wifiParked = true) }
+        AppHost.updateState {
+            it.copy(wifiParked = true, wifiLink = if (wifi.isWifiEnabled()) LinkStatus.STANDBY else LinkStatus.OFF)
+        }
     }
 
     /** Bring Wi-Fi back up over the live BLE link — for projection, or to re-activate rendering
@@ -1301,20 +1484,34 @@ class DashService : Service() {
         if (password.isNullOrBlank()) {
             Log.w(TAG, "unparkWifi: no saved password"); return false
         }
+        // Radio off: the request would only sit pending for 45 s. Stay parked.
+        if (!wifi.isWifiEnabled()) {
+            Log.w(TAG, "unparkWifi: phone Wi-Fi is off — staying parked")
+            AppHost.updateState { it.copy(wifiLink = LinkStatus.OFF) }
+            return false
+        }
         Log.i(TAG, "un-park Wi-Fi — re-joining dash AP")
         wifiParked = false
-        AppHost.updateState { it.copy(wifiParked = false) }
+        AppHost.updateState { it.copy(wifiParked = false, wifiLink = LinkStatus.CONNECTING) }
         val onDashAp = wifi.currentSsid()?.startsWith(settings.dashSsidPrefix) == true || wifi.isOnDashSubnet()
         if (!onDashAp) {
             val network = kotlinx.coroutines.withTimeoutOrNull(45_000L) {
                 wifi.requestDashNetwork(settings.dashSsidPrefix, password, settings.dashExactSsid)
             }
             if (network == null) {
-                Log.w(TAG, "unparkWifi: Wi-Fi request failed/timed out")
+                Log.w(TAG, "unparkWifi: Wi-Fi request failed/timed out — back to parked")
+                // Back to the BLE-only state rather than leaving a dead request registered and
+                // the supervisor treating the missing Wi-Fi as a fault.
+                wifiParked = true
+                runCatching { wifi.release() }
+                AppHost.updateState {
+                    it.copy(wifiParked = true, wifiLink = if (wifi.isWifiEnabled()) LinkStatus.FAILED else LinkStatus.OFF)
+                }
                 return false
             }
         }
         Log.i(TAG, "un-park Wi-Fi — back on dash AP")
+        AppHost.updateState { it.copy(wifiLink = LinkStatus.CONNECTED) }
         return true
     }
 
@@ -1452,6 +1649,7 @@ class DashService : Service() {
     }
 
     override fun onDestroy() {
+        runCatching { unregisterReceiver(wifiStateReceiver) }
         runCatching { liveProjection.stop() }
         runCatching { projection.stop() }
         // Close TCP server sockets and the BLE GATT explicitly. Cancelling the scope
@@ -1523,6 +1721,7 @@ class DashService : Service() {
         const val ACTION_ARM_PROJECTION = "kovedash.ARM_PROJECTION"
         const val ACTION_PARK_WIFI = "kovedash.PARK_WIFI"     // BLE-primary: drop Wi-Fi
         const val ACTION_UNPARK_WIFI = "kovedash.UNPARK_WIFI" // bring Wi-Fi back up
+        const val ACTION_ACTIVATE_WIFI = "kovedash.ACTIVATE_WIFI" // retry the Wi-Fi rendering activation
         const val ACTION_FORWARD_TBT = "kovedash.FORWARD_TBT"
         const val ACTION_END_TBT = "kovedash.END_TBT"
         const val ACTION_TEST_NAV = "kovedash.TEST_NAV"
@@ -1627,6 +1826,11 @@ class DashService : Service() {
         /** Bring Wi-Fi back up over the live BLE link (for projection or re-activation). */
         fun unparkWifi(ctx: Context) {
             ctx.startService(Intent(ctx, DashService::class.java).setAction(ACTION_UNPARK_WIFI))
+        }
+
+        /** Retry the dash's Wi-Fi rendering activation over the live BLE link. */
+        fun activateWifi(ctx: Context) {
+            ctx.startService(Intent(ctx, DashService::class.java).setAction(ACTION_ACTIVATE_WIFI))
         }
 
         /** Stop the video stream but keep the dash link up (BLE + Wi-Fi control), returning to
