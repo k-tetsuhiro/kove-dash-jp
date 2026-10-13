@@ -45,6 +45,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlin.math.abs
 
 /**
  * Single foreground service that owns the connection lifecycle:
@@ -725,21 +726,51 @@ class DashService : Service() {
     }
 
     /**
-     * Immediately pushes weather + elevation, then refreshes both every
-     * [AMBIENT_REFRESH_MS]. Weather is a single frame, elevation two — both far below the
-     * nav pacing budget, and the refresh interval is minutes, so this never meaningfully
-     * congests the BLE link even during active turn-by-turn. Re-armed on each connect.
+     * Immediately pushes weather + elevation, then keeps each fresh on its own cadence:
+     *  - weather every [WEATHER_REFRESH_MS] — Open-Meteo's `current` only moves about every
+     *    15 min, so polling faster would just re-send the same reading;
+     *  - elevation checked every [ALTITUDE_CHECK_MS] but only pushed when it has moved at least
+     *    [ALTITUDE_MIN_DELTA_M] since the last push (phone GPS altitude jitters by ±10–20 m, so
+     *    this keeps the dash readout steady), plus a [ALTITUDE_HEARTBEAT_MS] re-push so the
+     *    field never goes stale while parked.
+     * Weather is a single frame, elevation two — and most altitude checks send nothing, so this
+     * never meaningfully congests the BLE link even during active turn-by-turn. Re-armed on
+     * each connect (one parent job, so reconnects don't stack loops).
      */
     private fun startAmbientTelemetry() {
         telemetryJob?.cancel()
         telemetryJob = scope.launch {
-            while (true) {
-                if (ble.connectionState.value == DashBleClient.State.CONNECTED) {
-                    sendWeatherOnConnect()
-                    delay(1500) // small stagger so weather + altitude don't burst together
-                    sendAltitudeOnConnect()
+            launch {
+                while (true) {
+                    if (ble.connectionState.value == DashBleClient.State.CONNECTED) {
+                        sendWeatherOnConnect()
+                    }
+                    delay(WEATHER_REFRESH_MS)
                 }
-                delay(AMBIENT_REFRESH_MS)
+            }
+            launch {
+                delay(1500) // small stagger so weather + altitude don't burst together on connect
+                var lastSentAltM: Int? = null
+                var lastSentAtMs = 0L
+                while (true) {
+                    if (ble.connectionState.value == DashBleClient.State.CONNECTED) {
+                        val alt = lastKnownAltitudeMeters()
+                        val now = SystemClock.elapsedRealtime()
+                        val due = lastSentAltM == null ||
+                            (alt != null && abs(alt - lastSentAltM) >= ALTITUDE_MIN_DELTA_M) ||
+                            now - lastSentAtMs >= ALTITUDE_HEARTBEAT_MS
+                        if (alt == null) {
+                            if (due) Log.i(TAG, "altitude: no GPS altitude — skipping")
+                        } else if (due && sendAltitude(alt)) {
+                            lastSentAltM = alt
+                            lastSentAtMs = now
+                        }
+                    } else {
+                        // Link dropped: push straight away once it's back, whatever the delta.
+                        lastSentAltM = null
+                    }
+                    delay(ALTITUDE_CHECK_MS)
+                }
             }
         }
     }
@@ -786,12 +817,12 @@ class DashService : Service() {
 
     /** Push the phone's real GPS elevation to the dash's native altitude field (msg_type=9).
      *  Proven 2026-07-30: the dash's elevation readout (trip/odo section) takes this value. */
-    private suspend fun sendAltitudeOnConnect() {
-        val alt = lastKnownAltitudeMeters() ?: run { Log.i(TAG, "altitude: no GPS altitude — skipping"); return }
+    private suspend fun sendAltitude(alt: Int): Boolean {
         runCatching {
             ble.sendJson(DashMessages.setAltitude(alt, alt, alt))
-        }.onFailure { Log.w(TAG, "altitude send failed", it); return }
+        }.onFailure { Log.w(TAG, "altitude send failed", it); return false }
         Log.i(TAG, "altitude sent: ${alt}m")
+        return true
     }
 
     @SuppressLint("MissingPermission")
@@ -1797,10 +1828,13 @@ class DashService : Service() {
         // Wi-Fi/17818 re-activation — not just a BLE re-link. Below this = a transient blip.
         const val POWER_CYCLE_OUTAGE_MS = 5_000L
 
-        // How often to re-push weather + elevation after the initial connect push. 5 min
-        // keeps elevation reasonably live on a ride while weather (slow-moving) stays fresh;
-        // tune anywhere in the ~5–15 min range.
-        const val AMBIENT_REFRESH_MS = 5L * 60L * 1000L
+        // Ambient refresh cadence (see startAmbientTelemetry). Weather matches Open-Meteo's
+        // ~15 min `current` update interval. Elevation is checked every minute but only pushed
+        // on a real change (beyond GPS altitude jitter), with a 5 min heartbeat re-push.
+        const val WEATHER_REFRESH_MS = 15L * 60L * 1000L
+        const val ALTITUDE_CHECK_MS = 60L * 1000L
+        const val ALTITUDE_MIN_DELTA_M = 15
+        const val ALTITUDE_HEARTBEAT_MS = 5L * 60L * 1000L
 
         fun startConnect(ctx: Context) {
             val i = Intent(ctx, DashService::class.java).setAction(ACTION_CONNECT)
